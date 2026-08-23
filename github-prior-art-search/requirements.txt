@@ -1,7 +1,4 @@
 requests>=2.31
 python-dateutil>=2.9
-packaging>=24.0
 PyYAML>=6.0
 Jinja2>=3.1
-# spdx-tools 為可選依賴：安裝時用於 SPDX ID 驗證；未安裝時腳本自動降級為字串比對。
-# spdx-tools>=0.8

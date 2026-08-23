@@ -70,6 +70,7 @@ bash scripts/check_dependencies.sh
 ### 步驟 4：執行腳本
 
 ```bash
+# 若有 .venv（README 快速開始建立）用 .venv/bin/python3，否則用 python3
 python3 main.py --input /tmp/prior_art_input.json --output-dir output/github-prior-art-search
 ```
 

@@ -33,6 +33,15 @@ def load_config() -> Dict[str, Any]:
     return _CONFIG_CACHE
 
 
+def load_skill_metadata() -> Dict[str, Any]:
+    """技能名稱與版本以 SKILL.md frontmatter 為唯一來源（agentskills.io 標準）。"""
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    if not match:
+        raise ScriptFailure("SKILL.md 缺少 YAML frontmatter", "invalid_skill")
+    return yaml.safe_load(match.group(1))
+
+
 def get_github_token() -> str:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:

@@ -37,7 +37,7 @@ github-prior-art-search/
 ├── main.py               # 主入口（§8 執行流程）
 ├── config.yaml           # 所有規則資料化：硬性規則／評分權重／授權政策／決策門檻
 ├── templates/
-│   ├── queries.yaml      # 查詢模板來源說明
+│   ├── queries.yaml      # §9 查詢模板（由 build_queries() 載入，單一事實來源）
 │   └── report.md.jinja2  # §20 報告模板
 ├── scripts/
 │   ├── check_dependencies.sh   # §4 依賴檢查

@@ -1,8 +1,5 @@
-skill:
-  # 設計文件內部識別名為 github-prior-art-search；安裝用技能名依
-  # Agent Skills 標準（agentskills.io）須為小寫字母、數字與連字號。
-  name: github-prior-art-search
-  version: "1.1.0"
+# 技能名稱與版本以 SKILL.md 的 frontmatter 為唯一來源
+# （Agent Skills 標準，agentskills.io）；本檔僅存放執行規則。
 
 # ---------------------------------------------------------------------------
 # 硬性規則（§5）：由腳本強制執行，模型不得覆寫

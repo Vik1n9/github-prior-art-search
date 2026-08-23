@@ -16,10 +16,11 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 from common import (ScriptFailure, get_github_token, load_config,
-                    output_dir, utc_now_iso, write_json)  # noqa: E402
+                    load_skill_metadata, output_dir, utc_now_iso, write_json)  # noqa: E402
 from build_recommendation import (build_recommendation, candidate_summary,  # noqa: E402
                                   decide_reuse)
-from parse_dependencies import analyze_dependencies  # noqa: E402
+from parse_dependencies import (analyze_dependencies,  # noqa: E402
+                                dependency_risks)
 from parse_license import analyze_license  # noqa: E402
 from score_candidates import calculate_scores, compute_risks  # noqa: E402
 import search_github as sg  # noqa: E402
@@ -82,9 +83,8 @@ def analyze_candidate(repo: Dict[str, Any], input_data: Dict[str, Any],
                               now_ts=now_ts, config=config)
 
     dep_risks = []
-    from parse_dependencies import dependency_risks as dep_risk_rules
     if dependency_summary:
-        dep_risks = dep_risk_rules(dependency_summary, config)
+        dep_risks = dependency_risks(dependency_summary, config)
     risks = compute_risks(license_info, dep_risks, repo, config)
 
     decision = decide_reuse(scores, risks, repo, config)
@@ -193,6 +193,7 @@ def main(argv: List[str]) -> int:
     args = parse_args(argv)
     started_at = utc_now_iso()
     config = load_config()
+    skill_meta = load_skill_metadata()
 
     # 步驟 1：依賴已由 check_dependencies.sh 驗證；此處驗證必要環境
     token = get_github_token()  # §22.1：缺 GITHUB_TOKEN 必須失敗並回報原因
@@ -267,12 +268,12 @@ def main(argv: List[str]) -> int:
                          "detail": "無候選專案，輸出 build_in_house 建議。"})
 
     result = {
-        "skill": config["skill"]["name"],
+        "skill": skill_meta["name"],
         "status": status,
         "execution": {
             "started_at": started_at,
             "finished_at": finished_at,
-            "script_version": str(config["skill"]["version"]),
+            "script_version": str((skill_meta.get("metadata") or {}).get("version", "")),
         },
         "project": {
             "goal": input_data.get("project_goal", ""),

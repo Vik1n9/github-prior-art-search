@@ -31,7 +31,7 @@ for bin in bash git curl jq python3; do
   fi
 done
 
-# --- Python 依賴（§4.2）；spdx-tools 可選 ---
+# --- Python 依賴（§4.2）---
 if have "${PYTHON}"; then
   while IFS= read -r mod; do
     mod_name="${mod%%:*}"
@@ -47,10 +47,8 @@ if have "${PYTHON}"; then
   done <<'EOF'
 requests:required
 dateutil:required
-packaging:required
 yaml:required
 jinja2:required
-spdx_tools:optional
 EOF
 fi
 

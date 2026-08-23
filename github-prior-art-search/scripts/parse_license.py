@@ -6,13 +6,6 @@ LICENSE_FILE_CANDIDATES = (
     "license", "license.txt", "license.md", "copying", "copying.txt",
 )
 
-# spdx-tools 為可選依賴：未安裝時降級為字串比對（§4.2 備註）
-try:
-    from spdx_tools.spdx.validation.spdx_id_validator import validate_spdx_id  # noqa: F401
-    HAS_SPDX_TOOLS = True
-except Exception:
-    HAS_SPDX_TOOLS = False
-
 
 def normalize_spdx(spdx_id: Optional[str]) -> Optional[str]:
     if not spdx_id:
@@ -37,9 +30,6 @@ def classify_license(spdx_id: Optional[str], config: Dict[str, Any]) -> str:
     normalized = normalize_spdx(spdx_id)
     if normalized is None:
         return "unknown"
-    if HAS_SPDX_TOOLS:
-        # 有工具時仍以政策清單為準，工具僅供格式參考；字串比對為主。
-        pass
     upper = normalized.upper()
     for category in ("preferred", "review_required", "high_risk"):
         if any(upper == str(x).upper() for x in policy.get(category, [])):

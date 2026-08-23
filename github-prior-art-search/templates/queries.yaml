@@ -1,29 +1,25 @@
-# 查詢模板（§9.2）
+# 查詢模板（§9.2）。scripts/search_github.py 的 build_queries() 依本檔產生查詢，
+# 所有查詢自動附加 stars:>={effective_min_stars}（強制 ≥100，§6）。
 #
-# 查詢由 scripts/search_github.py 的 build_queries() 依本檔欄位權重組合輸入產生。
-# 本檔保留模板定義供調整；實際組合邏輯以程式碼為準，避免兩處漂移。
-
-keyword_sources:
-  project_goal:
-    weight: 5
-  core_features:
-    weight: 4
-  domain:
-    weight: 3
-  architecture_style:
-    weight: 2
-  tech_stack:
-    weight: 2
+# 佔位符：
+#   {goal_first_words}  專案目標前 3 個詞
+#   {domain}            領域（底線轉空白）
+#   {feature}           核心功能（feature_limit 控制取前幾個，各取前 2 個詞）
+#   {tech_stack}        技術堆疊（stack_limit 控制取前幾個）
+# 同一模板含多個多值佔位符時採笛卡兒積展開；任一佔位符無值則跳過該模板。
 
 templates:
-  - "{goal_first_words}"                # 專案目標前三詞直接查詢
-  - "{domain} admin dashboard"
-  - "topic:{domain}"
-  - "{feature} management system"       # 取前 3 個功能
-  - "{feature} engine"                  # 取前 2 個功能
-  - "{tech_stack} {domain}"
-  - "{tech_stack} {feature}"
+  - template: "{goal_first_words}"
+  - template: "{domain} admin dashboard"
+  - template: "topic:{domain}"
+  - template: "{feature} management system"
+    feature_limit: 3
+  - template: "{feature} engine"
+    feature_limit: 2
+  - template: "{tech_stack} {domain}"
+  - template: "{tech_stack} {feature}"
+    stack_limit: 2
+    feature_limit: 1
 
 notes:
-  - 所有查詢自動附加 stars:>={effective_min_stars}（強制 ≥100，§6）
   - extra_keywords 輸入欄位可由模型補充英文關鍵字（§15 model_allowed_tasks）

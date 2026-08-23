@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """GitHub 搜尋：輸入校驗、模板化查詢生成（§9）、API 查詢與本地二次過濾（§10）。"""
+import itertools
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 from common import (ScriptFailure, http_get_json, http_get_text, load_config,
                     tokenize)
@@ -56,12 +60,66 @@ def effective_min_stars(input_data: Dict[str, Any]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 模板化查詢生成（§9）
+# 模板化查詢生成（§9）：模板定義於 templates/queries.yaml，避免與程式碼漂移
 # ---------------------------------------------------------------------------
+
+_QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.yaml"
+_QUERIES_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _queries_config() -> Dict[str, Any]:
+    global _QUERIES_CACHE
+    if _QUERIES_CACHE is None:
+        with open(_QUERIES_PATH, "r", encoding="utf-8") as f:
+            _QUERIES_CACHE = yaml.safe_load(f)
+    return _QUERIES_CACHE
+
 
 def _first_words(text: str, count: int = 3) -> str:
     tokens = tokenize(text)
     return " ".join(tokens[:count])
+
+
+def _expand_template(template: str, spec: Dict[str, Any],
+                     goal: str, features: List[str],
+                     domain: str, stacks: List[str]) -> List[str]:
+    """展開單一模板：多值佔位符採笛卡兒積；任一佔位符無值回傳空清單。"""
+    tokens = re.findall(r"\{(\w+)\}", template)
+    options: Dict[str, List[str]] = {}
+    for token in tokens:
+        if token == "goal_first_words":
+            value = _first_words(goal, 3)
+            if not value:
+                return []
+            options[token] = [value]
+        elif token == "domain":
+            if not domain:
+                return []
+            options[token] = [domain]
+        elif token == "feature":
+            limit = int(spec.get("feature_limit", 1))
+            values = [w for w in (_first_words(f, 2) for f in features[:limit]) if w]
+            if not values:
+                return []
+            options[token] = values
+        elif token == "tech_stack":
+            limit = int(spec.get("stack_limit", 1))
+            values = [s for s in stacks[:limit] if s]
+            if not values:
+                return []
+            options[token] = values
+        else:
+            return []
+
+    rendered: List[str] = []
+    for combo in itertools.product(*(options[t] for t in tokens)):
+        query = template
+        for token, value in zip(tokens, combo):
+            query = query.replace("{" + token + "}", value)
+        query = re.sub(r"\s+", " ", query).strip()
+        if query:
+            rendered.append(query)
+    return rendered
 
 
 def build_queries(input_data: Dict[str, Any]) -> List[str]:
@@ -81,23 +139,11 @@ def build_queries(input_data: Dict[str, Any]) -> List[str]:
         if q and q.lower() not in {x.lower() for x in queries}:
             queries.append(q)
 
-    # 目標短語（前 3 個詞）直接作為查詢
-    goal_short = _first_words(goal, 3)
-    add(goal_short)
-
-    # §9.2 模板
-    if domain:
-        add(f"{domain} admin dashboard")
-        add(f"topic:{domain}")
-    for feature in features[:3]:
-        add(f"{_first_words(feature, 2)} management system")
-    for feature in features[:2]:
-        add(f"{_first_words(feature, 2)} engine")
-    if stacks and domain:
-        add(f"{stacks[0]} {domain}")
-    for stack in stacks[:2]:
-        for feature in features[:1]:
-            add(f"{stack} {_first_words(feature, 2)}")
+    for item in _queries_config()["templates"]:
+        template = item["template"] if isinstance(item, dict) else str(item)
+        spec = item if isinstance(item, dict) else {}
+        for expanded in _expand_template(template, spec, goal, features, domain, stacks):
+            add(expanded)
 
     for kw in extra:
         add(kw)

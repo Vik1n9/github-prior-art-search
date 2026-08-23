@@ -75,10 +75,12 @@ system_dependencies:
 python_dependencies:
   - requests>=2.31
   - python-dateutil>=2.9
-  - packaging>=24.0
   - pyyaml>=6.0
-  - spdx-tools>=0.8
+  - jinja2>=3.1
 ```
+
+> 實作備註：原始設計列有 `packaging` 與 `spdx-tools`，實作確認無使用後已自
+> `requirements.txt` 移除；實際依賴清單以 `requirements.txt` 為準。
 
 ### 4.3 可選 CLI 依賴
 
@@ -794,9 +796,8 @@ dependencies:
   python:
     - requests>=2.31
     - python-dateutil>=2.9
-    - packaging>=24.0
     - pyyaml>=6.0
-    - spdx-tools>=0.8
+    - jinja2>=3.1
   optional_cli:
     - gh
     - npm

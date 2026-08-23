@@ -372,6 +372,3 @@ def analyze_dependencies(paths: List[str],
 
     summary = summarize_dependencies(dependencies, lockfiles, manifests)
     return summary, warnings
-
-
-from typing import Tuple  # noqa: E402
