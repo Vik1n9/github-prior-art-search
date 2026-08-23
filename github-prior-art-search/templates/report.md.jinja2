@@ -1,0 +1,84 @@
+# GitHub 先行調研報告
+
+> 由 `github-prior-art-search` 腳本模板產生（script-first，§20）。生成時間：{{ generated_at }}
+
+## 專案輸入
+
+- 專案目標：{{ input.goal }}
+- 核心功能：{% for f in input.core_features %}{{ f }}{% if not loop.last %}、{% endif %}{% endfor %}
+- 技術堆疊：{% if input.tech_stack %}{% for t in input.tech_stack %}{{ t }}{% if not loop.last %}、{% endif %}{% endfor %}{% else %}（未提供）{% endif %}
+{% if input.domain %}- 領域：{{ input.domain }}
+{% endif %}
+## 搜尋條件
+
+- 最低星數：{{ search.effective_min_stars }}（腳本強制）
+- 忽略封存專案：是
+- 忽略禁用專案：是
+- 最後提交限制：{{ search.filters.last_commit_within_days }} 天
+- 執行查詢數：{{ search.queries|length }}
+- 原始結果：{{ search.raw_results }} → 過濾後 {{ search.after_filter }} → 深度分析 {{ search.deep_analyzed }}
+
+<details>
+<summary>搜尋查詢清單</summary>
+
+```text
+{% for q in search.queries %}{{ q }}
+{% endfor %}
+```
+</details>
+
+## 候選專案
+
+{% if candidates %}
+| 專案 | 星數 | 授權 | 最後更新 | 總分 | 決策 |
+|---|---:|---|---|---:|---|
+{% for c in candidates %}
+| [{{ c.repository }}]({{ c.url }}) | {{ c.stars }} | {{ c.license.spdx_id or "unknown" }} | {{ (c.pushed_at or "")[:10] }} | {{ c.scores.total }} | {{ c.reuse_decision }} |
+{% endfor %}
+
+### 各候選詳情
+
+{% for c in candidates %}
+#### {{ loop.index }}. {{ c.repository }} — 決策：{{ c.reuse_decision }}
+
+- 說明：{{ c.description or "（無說明）" }}
+- 星數：{{ c.stars }}｜Forks：{{ c.forks }}｜語言：{{ c.language or "未知" }}
+- 授權：{{ c.license.spdx_id or "unknown" }}（分類：{{ c.license.category }}、來源：{{ c.license.source }}）
+- 分數：相關度 {{ c.scores.relevance }}｜重用性 {{ c.scores.reusability }}｜維護活躍度 {{ c.scores.maintenance_activity }}｜程式碼品質 {{ c.scores.code_quality }}｜文件 {{ c.scores.documentation }}｜授權契合 {{ c.scores.license_fit }}｜**總分 {{ c.scores.total }}**
+- 依賴：{{ c.dependencies.total_count }} 筆（runtime {{ c.dependencies.runtime_count }}／dev {{ c.dependencies.dev_count }}），未固定版本 {{ c.dependencies.unpinned_count }} 筆，lockfile：{{ "有" if c.dependencies.lockfile_present else "無" }}，清單檔：{% if c.dependencies.manifests_found %}{{ c.dependencies.manifests_found|join(", ") }}{% else %}未偵測到{% endif %}
+
+{% if c.risks %}
+- 風險標記：
+{% for r in c.risks %}
+  - [{{ r.level }}] {{ r.type }}：{{ r.detail }}
+{% endfor %}
+{% else %}
+- 風險標記：（無）
+{% endif %}
+
+> {{ c.get("summary", "") }}
+
+{% endfor %}
+{% else %}
+（無候選專案。所有輸入條件過濾後沒有符合的倉庫。）
+{% endif %}
+
+## 建議
+
+- 主要動作：**{{ recommendation.primary_action }}**{% if recommendation.primary_repository %}（{{ recommendation.primary_repository }}）{% endif %}
+- 主要原因：{{ recommendation.reason }}
+- 需自行開發部分：{% if recommendation.build_in_house_parts %}{% for p in recommendation.build_in_house_parts %}{{ p }}{% if not loop.last %}、{% endif %}{% endfor %}{% else %}（無）{% endif %}
+
+### 後續步驟
+
+{% for step in recommendation.next_steps %}
+{{ loop.index }}. {{ step }}
+{% endfor %}
+
+{% if warnings %}
+## 警告
+
+{% for w in warnings %}
+- {% if w.query %}[{{ w.query }}] {% endif %}{{ w.type }}：{{ w.detail }}
+{% endfor %}
+{% endif %}
