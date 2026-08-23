@@ -1,7 +1,6 @@
 # github-prior-art-search
 
-GitHub 先行調研與重用檢查技能（script-first）。設計規格見上層目錄
-《Agent Skill 設計：GitHub Prior Art Search, Script-First Version.md》。
+GitHub 先行調研與重用檢查技能（script-first）。
 
 **零第三方依賴**：僅需 Python 3.9+ 與 bash，全部使用標準庫，
 無需 pip / venv。
