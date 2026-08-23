@@ -1,0 +1,120 @@
+# github-prior-art-search
+
+[English](README.md) ｜ [繁體中文](README.zh-TW.md)
+
+GitHub **先行調研與重用檢查** Agent Skill。動手開發之前，先找出 GitHub 上
+值得直接採用為依賴、fork 改造、或作為架構參考的既有專案——不要重造輪子。
+
+本技能遵循 [Agent Skills](https://agentskills.io) 標準（`SKILL.md`），
+可安裝於 OpenCode、Claude Code 等支援技能的 coding agent。
+
+## 為什麼是 script-first
+
+以 LLM 主導的研究對硬性條件不可靠。本技能將所有決策放進確定性的腳本；
+模型只能在受限 schema 下產生文字摘要：
+
+| 硬性規則 | 執行方式 |
+|---|---|
+| 忽略星數 < 100 的倉庫 | 腳本強制過濾，模型不得調降門檻 |
+| 忽略 archived / disabled 倉庫 | 腳本強制過濾 |
+| 無授權的倉庫不得「直接採用」 | 降級為 reference-only，風險等級 high |
+| Copyleft 授權須人工複審 | 腳本標記 |
+| 評分與重用決策 | 六維度加權評分由程式碼計算 |
+| 模型輸出 | 僅文字摘要；不得新增/刪除候選、更改排序或覆寫決策 |
+
+所有規則皆資料化（`config.json`、`templates/queries.json`），行為可稽核、
+可重現。
+
+**零第三方依賴**：僅需 Python 3.9+ 標準庫與 bash——無需 pip / venv。
+
+## 快速開始
+
+### 以 OpenCode 指令調用（建議）
+
+將指令檔複製到全域指令目錄：
+
+```bash
+cp command/github-search.md ~/.config/opencode/command/
+```
+
+之後在任何專案輸入 `/github-search <專案目標 + 核心功能 + 技術堆疊>` 即可，
+例如：`/github-search 遊戲活動配置後台，活動配置／獎勵發放，TypeScript Node.js`。
+
+技能本體也需安裝於全域（`~/.config/opencode/skills/github-prior-art-search/`）。
+
+### 手動執行
+
+```bash
+# 1. 依賴檢查（缺任何必要依賴會拒絕並印出原因）
+bash scripts/check_dependencies.sh
+
+# 2. 設定 token
+export GITHUB_TOKEN=ghp_xxx
+
+# 3. 準備輸入 JSON（見 SKILL.md / input.example.json）後執行
+python3 main.py --input input.example.json --output-dir output/github-prior-art-search
+```
+
+輸入必填 `project_goal` 與 `core_features`；選填欄位包括 `tech_stack`、
+`domain`、`license_preference`、`exclude_repos`、`extra_keywords`、
+`max_candidates`、`min_stars`（低於 100 一律強制回升為 100）。
+
+輸出寫入指定的輸出目錄：
+
+| 檔案 | 內容 |
+|---|---|
+| `result.json` | 完整結果（狀態、查詢、候選、建議、警告） |
+| `result.md` | 人類可讀報告 |
+| `candidates.json` | 候選清單，含分數與風險 |
+| `dependencies.json` | 各候選依賴解析結果 |
+| `decision.json` | 主要建議與各候選決策 |
+
+缺少必要輸入或執行失敗時以非零結束；部分失敗時 `status = "partial"`，
+細節記錄在 `warnings`。
+
+## 執行流程
+
+1. 校驗輸入並套用硬性規則（星數門檻 ≥ 100）。
+2. 由模板（`templates/queries.json`）產生搜尋查詢，目標／領域／功能／技術棧
+   佔位符採笛卡兒積展開。
+3. 呼叫 GitHub Search API（處理 rate limit，磁碟快取）。
+4. 本地二次過濾：星數、archived/disabled、黑名單、最後提交天數。
+5. 對前 N 名候選深度分析：檔案樹、README、授權偵測、依賴清單與 lockfile、
+   release。
+6. 計算六維度分數（相關度、重用性、維護活躍度、程式碼品質、文件、授權契合）
+   並做出決策：adopt / fork / use-as-template / reference-only /
+   build-in-house。
+
+評分訊號與決策門檻的細節見 [references/RULES.md](references/RULES.md)。
+
+## 測試
+
+```bash
+python3 -m pytest tests/ -v   # pytest 僅為開發/測試用依賴
+```
+
+所有測試離線執行（mock GitHub 回應）。
+
+## 目錄結構
+
+```
+├── SKILL.md              # Agent Skills 標準技能定義
+├── main.py               # 主入口（執行流程＋報告渲染）
+├── config.json           # 所有規則資料化：硬性規則／評分權重／授權政策／決策門檻
+├── templates/
+│   └── queries.json      # §9 查詢模板（單一事實來源）
+├── scripts/
+│   ├── check_dependencies.sh   # 依賴檢查（僅需 bash + Python 3.9+）
+│   ├── common.py               # 設定、快取 HTTP 客戶端（urllib）、文字比對
+│   ├── search_github.py        # 輸入校驗、查詢生成、搜尋與過濾
+│   ├── parse_license.py        # 授權解析與分類
+│   ├── parse_dependencies.py   # 依賴清單解析
+│   ├── score_candidates.py     # 評分模型
+│   └── build_recommendation.py # 決策規則
+├── tests/                # pytest（離線）
+└── references/RULES.md   # 規則細節與設計決定
+```
+
+## 授權
+
+[MIT](LICENSE)

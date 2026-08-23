@@ -1,49 +1,125 @@
 # github-prior-art-search
 
-GitHub 先行調研與重用檢查技能（script-first）。
+[English](README.md) ｜ [繁體中文](README.zh-TW.md)
 
-**零第三方依賴**：僅需 Python 3.9+ 與 bash，全部使用標準庫，
-無需 pip / venv。
+A **prior-art search and reuse-check Agent Skill** for GitHub. Before you build
+from scratch, it finds existing projects worth adopting as a dependency,
+forking, or using as a reference — so you never reinvent the wheel.
 
-## 快速開始
+It follows the [Agent Skills](https://agentskills.io) standard (`SKILL.md`) and
+works with skill-capable coding agents such as OpenCode or Claude Code.
+
+## Why "script-first"
+
+LLM-driven research is unreliable for hard requirements. This skill moves every
+decision into deterministic scripts; the model may only summarize results under
+a restricted schema:
+
+| Hard rule | Enforcement |
+|---|---|
+| Ignore repos with < 100 stars | Script filter, model cannot lower the floor |
+| Ignore archived / disabled repos | Script filter |
+| Repos with no license are never "adopt directly" | Downgraded to reference-only, high risk |
+| Copyleft licenses require manual review | Script flag |
+| Scoring & reuse decision | Six-dimension weighted score computed in code |
+| Model output | Text summary only; cannot add/remove candidates, change ranking, or override decisions |
+
+All rules live in data files (`config.json`, `templates/queries.json`) rather
+than code, so behavior is auditable and reproducible.
+
+**Zero third-party dependencies**: Python 3.9+ standard library and bash only —
+no pip, no venv.
+
+## Quick start
+
+### As an OpenCode command (recommended)
+
+Copy the command file to your global commands directory:
 
 ```bash
-# 1. 依賴檢查（缺任何必要依賴會拒絕並印出原因）
+cp command/github-search.md ~/.config/opencode/command/
+```
+
+Then invoke from any project with `/github-search <project goal + features + tech stack>`,
+e.g. `/github-search 遊戲活動配置後台，活動配置／獎勵發放，TypeScript Node.js`.
+
+The skill itself must be installed globally as well
+(`~/.config/opencode/skills/github-prior-art-search/`).
+
+### Manual
+
+```bash
+# 1. Dependency check (refuses to run and prints what's missing)
 bash scripts/check_dependencies.sh
 
-# 2. 設定 token
+# 2. Set a token
 export GITHUB_TOKEN=ghp_xxx
 
-# 3. 準備輸入 JSON（格式見 SKILL.md 步驟 3）後執行
+# 3. Prepare an input JSON (see SKILL.md / input.example.json) and run
 python3 main.py --input input.example.json --output-dir output/github-prior-art-search
 ```
 
-## 測試
+Input requires `project_goal` and `core_features`; optional fields include
+`tech_stack`, `domain`, `license_preference`, `exclude_repos`, `extra_keywords`,
+`max_candidates`, `min_stars` (a value below 100 is forced back up to 100).
+
+Outputs are written to the output directory:
+
+| File | Content |
+|---|---|
+| `result.json` | Full result (status, queries, candidates, recommendation, warnings) |
+| `result.md` | Human-readable report |
+| `candidates.json` | Candidate list with scores and risks |
+| `dependencies.json` | Parsed dependencies per candidate |
+| `decision.json` | Primary recommendation and per-candidate decisions |
+
+Exit status is non-zero when required inputs are missing or the run fails;
+partial failures set `status = "partial"` with details in `warnings`.
+
+## How it works
+
+1. Validate input and enforce hard rules (star floor ≥ 100).
+2. Build search queries from templates (`templates/queries.json`), expanding
+   goal/domain/features/tech-stack placeholders with Cartesian products.
+3. Query the GitHub Search API (rate-limit aware, disk-cached).
+4. Re-filter locally: stars, archived/disabled, blacklist, last commit age.
+5. Deep-analyze top N candidates: file tree, README, license detection,
+   dependency manifests/lockfiles, releases.
+6. Score six dimensions (relevance, reusability, maintenance activity, code
+   quality, documentation, license fit) and decide: adopt / fork /
+   use-as-template / reference-only / build-in-house.
+
+Details of scoring signals and decision thresholds are documented in
+[references/RULES.md](references/RULES.md).
+
+## Testing
 
 ```bash
-python3 -m pytest tests/ -v   # pytest 僅為開發/測試用依賴
+python3 -m pytest tests/ -v   # pytest is a dev/test-only dependency
 ```
 
-測試全部離線執行（mock GitHub 回應）；標記 `integration` 的冒煙測試需要
-`GITHUB_TOKEN` 且以 `--integration` 啟用。
+All tests run offline against mocked GitHub responses.
 
-## 目錄結構
+## Project layout
 
 ```
-github-prior-art-search/
-├── SKILL.md              # Agent Skills 標準技能定義
-├── main.py               # 主入口（§8 執行流程）＋報告渲染（§20）
-├── config.json           # 所有規則資料化：硬性規則／評分權重／授權政策／決策門檻
+├── SKILL.md              # Agent Skills standard definition
+├── main.py               # Entry point (execution flow + report rendering)
+├── config.json           # Rules as data: hard rules / weights / license policy / decision gates
 ├── templates/
-│   └── queries.json      # §9 查詢模板（由 build_queries() 載入，單一事實來源）
+│   └── queries.json      # §9 query templates (single source of truth)
 ├── scripts/
-│   ├── check_dependencies.sh   # §4 依賴檢查（僅 bash + Python 3.9+）
-│   ├── common.py               # 設定、快取 HTTP 客戶端、文字比對（urllib）
-│   ├── search_github.py        # §6 輸入校驗、§9 查詢生成、§10 搜尋過濾
-│   ├── parse_license.py        # §11 授權解析
-│   ├── parse_dependencies.py   # §12 依賴解析
-│   ├── score_candidates.py     # §13 評分模型
-│   └── build_recommendation.py # §14 決策規則
-├── tests/                # pytest（離線）
-└── references/RULES.md   # 規則細節與設計決定
+│   ├── check_dependencies.sh   # Dependency check (bash + Python 3.9+ only)
+│   ├── common.py               # Config, cached HTTP client (urllib), text matching
+│   ├── search_github.py        # Input validation, query building, search & filtering
+│   ├── parse_license.py        # License parsing and classification
+│   ├── parse_dependencies.py   # Dependency manifest parsing
+│   ├── score_candidates.py     # Scoring model
+│   └── build_recommendation.py # Decision rules
+├── tests/                # pytest (offline)
+└── references/RULES.md   # Rule details and design decisions
 ```
+
+## License
+
+[MIT](LICENSE)

@@ -10,6 +10,7 @@ description: >-
 compatibility: >-
   Requires bash, Python 3.9+ (standard library only, no pip packages),
   network access to api.github.com, and the GITHUB_TOKEN environment variable.
+license: MIT
 metadata:
   version: "1.1.0"
   execution_mode: script_first
