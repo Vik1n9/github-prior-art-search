@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """GitHub 搜尋：輸入校驗、模板化查詢生成（§9）、API 查詢與本地二次過濾（§10）。"""
 import itertools
+import json
 import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-import yaml
 
 from common import (ScriptFailure, http_get_json, http_get_text, load_config,
                     tokenize)
@@ -60,10 +59,10 @@ def effective_min_stars(input_data: Dict[str, Any]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 模板化查詢生成（§9）：模板定義於 templates/queries.yaml，避免與程式碼漂移
+# 模板化查詢生成（§9）：模板定義於 templates/queries.json，避免與程式碼漂移
 # ---------------------------------------------------------------------------
 
-_QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.yaml"
+_QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.json"
 _QUERIES_CACHE: Optional[Dict[str, Any]] = None
 
 
@@ -71,7 +70,7 @@ def _queries_config() -> Dict[str, Any]:
     global _QUERIES_CACHE
     if _QUERIES_CACHE is None:
         with open(_QUERIES_PATH, "r", encoding="utf-8") as f:
-            _QUERIES_CACHE = yaml.safe_load(f)
+            _QUERIES_CACHE = json.load(f)
     return _QUERIES_CACHE
 
 

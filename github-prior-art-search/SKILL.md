@@ -8,8 +8,8 @@ description: >-
   當使用者提到「先行調研」「prior art」「有沒有現成的專案」「不要重造輪子」
   「找類似的開源方案」「評估能不能直接用某 repo」時，務必使用此技能。
 compatibility: >-
-  Requires bash, git, curl, jq, Python 3.9+, network access to api.github.com,
-  and the GITHUB_TOKEN environment variable.
+  Requires bash, Python 3.9+ (standard library only, no pip packages),
+  network access to api.github.com, and the GITHUB_TOKEN environment variable.
 metadata:
   version: "1.1.0"
   execution_mode: script_first
@@ -32,7 +32,8 @@ metadata:
 bash scripts/check_dependencies.sh
 ```
 
-若回報缺少 Python 依賴，依輸出指示安裝後重新檢查。缺少依賴時**不得**繼續執行。
+本技能僅使用 Python 標準庫（無需 pip 安裝任何套件）；若回報缺少
+Python 3.9+ 或 bash，安裝後重新檢查。缺少依賴時**不得**繼續執行。
 
 ### 步驟 2：（必要）確認 GITHUB_TOKEN
 
@@ -70,7 +71,6 @@ bash scripts/check_dependencies.sh
 ### 步驟 4：執行腳本
 
 ```bash
-# 若有 .venv（README 快速開始建立）用 .venv/bin/python3，否則用 python3
 python3 main.py --input /tmp/prior_art_input.json --output-dir output/github-prior-art-search
 ```
 

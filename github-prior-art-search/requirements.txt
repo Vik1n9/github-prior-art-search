@@ -1,4 +1,0 @@
-requests>=2.31
-python-dateutil>=2.9
-PyYAML>=6.0
-Jinja2>=3.1

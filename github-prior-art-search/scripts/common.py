@@ -1,18 +1,22 @@
 # -*- coding: utf-8 -*-
-"""共用工具：設定載入、環境變數、帶快取的 HTTP 客戶端、文字處理。"""
+"""共用工具：設定載入、環境變數、帶快取的 HTTP 客戶端、文字處理。
+
+零第三方依賴：僅使用 Python 標準庫（urllib / json / hashlib / re）。
+"""
 import hashlib
 import json
 import os
 import re
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-import yaml
-
 SKILL_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = SKILL_ROOT / "config.yaml"
+CONFIG_PATH = SKILL_ROOT / "config.json"
+USER_AGENT = "github-prior-art-search"
 
 _CONFIG_CACHE: Optional[Dict[str, Any]] = None
 
@@ -29,8 +33,61 @@ def load_config() -> Dict[str, Any]:
     global _CONFIG_CACHE
     if _CONFIG_CACHE is None:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            _CONFIG_CACHE = yaml.safe_load(f)
+            _CONFIG_CACHE = json.load(f)
     return _CONFIG_CACHE
+
+
+# ---------------------------------------------------------------------------
+# SKILL.md frontmatter 解析（受限子集：純量、>- 摺疊區塊、單層巢狀映射）
+# ---------------------------------------------------------------------------
+
+def _parse_scalar(value: str) -> Any:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _parse_frontmatter(raw: str) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    lines = raw.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        if not m:
+            continue
+        key, rest = m.group(1), m.group(2).strip()
+        if rest in (">-", ">"):
+            folded: List[str] = []
+            while i < len(lines):
+                nxt = lines[i]
+                if not nxt.strip() or not nxt[:1].isspace():
+                    break
+                folded.append(nxt.strip())
+                i += 1
+            result[key] = " ".join(folded)
+        elif rest == "":
+            nested: Dict[str, Any] = {}
+            while i < len(lines):
+                nm = re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*)$", lines[i])
+                if not nm:
+                    break
+                nested[nm.group(1)] = _parse_scalar(nm.group(2))
+                i += 1
+            result[key] = nested
+        else:
+            result[key] = _parse_scalar(rest)
+    return result
 
 
 def load_skill_metadata() -> Dict[str, Any]:
@@ -39,7 +96,7 @@ def load_skill_metadata() -> Dict[str, Any]:
     match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not match:
         raise ScriptFailure("SKILL.md 缺少 YAML frontmatter", "invalid_skill")
-    return yaml.safe_load(match.group(1))
+    return _parse_frontmatter(match.group(1))
 
 
 def get_github_token() -> str:
@@ -88,6 +145,7 @@ def read_json(path: Path) -> Any:
 
 # ---------------------------------------------------------------------------
 # HTTP 客戶端：磁碟快取 + rate limit 處理（§22.3 → status=partial）
+# 以 urllib.request 實作，無需第三方套件。
 # ---------------------------------------------------------------------------
 
 class HttpResult:
@@ -109,6 +167,28 @@ def _cache_path(url: str, params: Optional[Dict[str, Any]]) -> Path:
     return cache_dir() / "api" / f"{safe_name}.{digest}.json"
 
 
+class NetworkError(Exception):
+    """DNS/連線/逾時等網路層錯誤（非 HTTP 狀態錯誤）。"""
+
+
+def _fetch(url: str, headers: Dict[str, str], timeout: float = 30
+           ) -> Tuple[int, Any, str]:
+    """GET 回傳 (status_code, headers, body_text)。網路層錯誤丟出 NetworkError。"""
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            return status, resp.headers, resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        return exc.code, exc.headers, body
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise NetworkError(str(getattr(exc, "reason", exc)))
+
+
 def http_get_json(url: str, token: Optional[str] = None,
                   params: Optional[Dict[str, Any]] = None,
                   headers: Optional[Dict[str, str]] = None,
@@ -121,7 +201,12 @@ def http_get_json(url: str, token: Optional[str] = None,
         except Exception:
             pass  # 快取損毀則重新抓取
 
-    base_headers = {"Accept": "application/vnd.github+json"}
+    full_url = url
+    if params:
+        full_url = url + "?" + urllib.parse.urlencode(params)
+
+    base_headers = {"Accept": "application/vnd.github+json",
+                    "User-Agent": USER_AGENT}
     if token:
         base_headers["Authorization"] = f"Bearer {token}"
     if headers:
@@ -132,39 +217,38 @@ def http_get_json(url: str, token: Optional[str] = None,
 
     for attempt in (0, 1):  # rate limit 時最多重試一次
         try:
-            resp = requests.get(url, params=params or {}, headers=base_headers, timeout=30)
-        except requests.RequestException as exc:
+            status, hdrs, text = _fetch(full_url, base_headers)
+        except NetworkError as exc:
             return HttpResult(error={"kind": "network", "detail": str(exc)})
 
-        if resp.status_code == 200:
+        if status == 200:
             try:
-                data = resp.json()
+                data = json.loads(text)
             except ValueError:
                 return HttpResult(error={"kind": "http", "detail": "回應非 JSON"})
             if use_cache:
                 write_json(cp, data)
             return HttpResult(data=data)
 
-        if resp.status_code in (403, 429) and attempt == 0:
-            remaining = resp.headers.get("x-ratelimit-remaining")
-            reset_hdr = resp.headers.get("x-ratelimit-reset")
+        if status in (403, 429) and attempt == 0:
+            remaining = hdrs.get("x-ratelimit-remaining")
+            reset_hdr = hdrs.get("x-ratelimit-reset")
+            retry_after = hdrs.get("retry-after")
             is_rate_limit = (remaining == "0") or (
-                resp.status_code == 429 and not resp.headers.get("retry-after"))
+                status == 429 and not retry_after)
             if is_rate_limit:
                 wait = max_wait
                 if reset_hdr and reset_hdr.isdigit():
                     wait = min(max(int(reset_hdr) - int(time.time()) + 2, 5), max_wait)
-                else:
-                    retry_after = resp.headers.get("retry-after")
-                    if retry_after and retry_after.isdigit():
-                        wait = min(max(int(retry_after), 5), max_wait)
+                elif retry_after and retry_after.isdigit():
+                    wait = min(max(int(retry_after), 5), max_wait)
                 time.sleep(wait)
                 continue
             return HttpResult(error={"kind": "http",
-                                     "detail": f"HTTP {resp.status_code}: {resp.text[:200]}"})
+                                     "detail": f"HTTP {status}: {text[:200]}"})
 
         return HttpResult(error={"kind": "http",
-                                 "detail": f"HTTP {resp.status_code}: {resp.text[:200]}"})
+                                 "detail": f"HTTP {status}: {text[:200]}"})
 
     return HttpResult(error={"kind": "rate_limit",
                              "detail": "GitHub API rate limit，重試後仍失敗"})
@@ -173,18 +257,18 @@ def http_get_json(url: str, token: Optional[str] = None,
 def http_get_text(url: str, token: Optional[str] = None,
                   accept: str = "text/plain; charset=utf-8") -> Tuple[Optional[str], Optional[Dict[str, str]]]:
     """抓取純文字內容（README、依賴清單）。回傳 (text, error)。"""
-    headers = {"Accept": accept}
+    headers = {"Accept": accept, "User-Agent": USER_AGENT}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
-    except requests.RequestException as exc:
+        status, _hdrs, text = _fetch(url, headers)
+    except NetworkError as exc:
         return None, {"kind": "network", "detail": str(exc)}
-    if resp.status_code == 200:
-        return resp.text, None
-    if resp.status_code == 404:
+    if status == 200:
+        return text, None
+    if status == 404:
         return None, None  # 檔案不存在不算錯誤
-    return None, {"kind": "http", "detail": f"HTTP {resp.status_code} for {url}"}
+    return None, {"kind": "http", "detail": f"HTTP {status} for {url}"}
 
 
 # ---------------------------------------------------------------------------

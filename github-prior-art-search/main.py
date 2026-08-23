@@ -139,13 +139,136 @@ def analyze_candidate(repo: Dict[str, Any], input_data: Dict[str, Any],
 # 輸出
 # ---------------------------------------------------------------------------
 
+def _join(items: List[Any], sep: str = "、") -> str:
+    return sep.join(str(x) for x in items)
+
+
+def render_report_text(context: Dict[str, Any]) -> str:
+    """以純字串組裝 Markdown 報告（原 §20 模板的標準庫實作）。"""
+    inp = context["input"]
+    search = context["search"]
+    candidates: List[Dict[str, Any]] = context["candidates"]
+    rec = context["recommendation"]
+    warnings = context["warnings"]
+    generated_at = context["generated_at"]
+
+    lines: List[str] = []
+    add = lines.append
+
+    add("# GitHub 先行調研報告")
+    add("")
+    add(f"> 由 `github-prior-art-search` 腳本模板產生（script-first，§20）。生成時間：{generated_at}")
+    add("")
+    add("## 專案輸入")
+    add("")
+    add(f"- 專案目標：{inp.get('goal', '')}")
+    add(f"- 核心功能：{_join(inp.get('core_features', []))}")
+    tech_stack = inp.get("tech_stack") or []
+    add(f"- 技術堆疊：{_join(tech_stack) if tech_stack else '（未提供）'}")
+    if inp.get("domain"):
+        add(f"- 領域：{inp['domain']}")
+    add("")
+    add("## 搜尋條件")
+    add("")
+    queries = search.get("queries", [])
+    add(f"- 最低星數：{search.get('effective_min_stars')}（腳本強制）")
+    add("- 忽略封存專案：是")
+    add("- 忽略禁用專案：是")
+    add(f"- 最後提交限制：{search['filters']['last_commit_within_days']} 天")
+    add(f"- 執行查詢數：{len(queries)}")
+    add(f"- 原始結果：{search.get('raw_results')} → 過濾後 "
+        f"{search.get('after_filter')} → 深度分析 {search.get('deep_analyzed')}")
+    add("")
+    add("<details>")
+    add("<summary>搜尋查詢清單</summary>")
+    add("")
+    add("```text")
+    for q in queries:
+        add(q)
+    add("```")
+    add("</details>")
+    add("")
+    add("## 候選專案")
+    add("")
+
+    if candidates:
+        add("| 專案 | 星數 | 授權 | 最後更新 | 總分 | 決策 |")
+        add("|---|---:|---|---|---:|---|")
+        for c in candidates:
+            spdx = (c.get("license") or {}).get("spdx_id") or "unknown"
+            pushed = (c.get("pushed_at") or "")[:10]
+            total = c["scores"]["total"]
+            add(f"| [{c['repository']}]({c.get('url')}) | {c.get('stars', 0)} | "
+                f"{spdx} | {pushed} | {total} | {c['reuse_decision']} |")
+        add("")
+        add("### 各候選詳情")
+        add("")
+        for idx, c in enumerate(candidates, start=1):
+            lic = c.get("license") or {}
+            deps = c.get("dependencies") or {}
+            manifests = deps.get("manifests_found") or []
+            add(f"#### {idx}. {c['repository']} — 決策：{c['reuse_decision']}")
+            add("")
+            add(f"- 說明：{c.get('description') or '（無說明）'}")
+            add(f"- 星數：{c.get('stars', 0)}｜Forks：{c.get('forks', 0)}"
+                f"｜語言：{c.get('language') or '未知'}")
+            add(f"- 授權：{lic.get('spdx_id') or 'unknown'}"
+                f"（分類：{lic.get('category')}、來源：{lic.get('source')}）")
+            s = c["scores"]
+            add(f"- 分數：相關度 {s['relevance']}｜重用性 {s['reusability']}"
+                f"｜維護活躍度 {s['maintenance_activity']}｜程式碼品質 "
+                f"{s['code_quality']}｜文件 {s['documentation']}｜授權契合 "
+                f"{s['license_fit']}｜**總分 {s['total']}**")
+            lockfile = "有" if deps.get("lockfile_present") else "無"
+            manifest_txt = ", ".join(manifests) if manifests else "未偵測到"
+            add(f"- 依賴：{deps.get('total_count', 0)} 筆"
+                f"（runtime {deps.get('runtime_count', 0)}／dev "
+                f"{deps.get('dev_count', 0)}），未固定版本 "
+                f"{deps.get('unpinned_count', 0)} 筆，lockfile：{lockfile}，"
+                f"清單檔：{manifest_txt}")
+            risks = c.get("risks") or []
+            if risks:
+                add("")
+                add("- 風險標記：")
+                for r in risks:
+                    add(f"  - [{r['level']}] {r['type']}：{r['detail']}")
+            else:
+                add("- 風險標記：（無）")
+            add("")
+            add(f"> {c.get('summary', '')}")
+            add("")
+    else:
+        add("（無候選專案。所有輸入條件過濾後沒有符合的倉庫。）")
+        add("")
+
+    add("## 建議")
+    add("")
+    primary_repo = rec.get("primary_repository")
+    suffix = f"（{primary_repo}）" if primary_repo else ""
+    add(f"- 主要動作：**{rec['primary_action']}**{suffix}")
+    add(f"- 主要原因：{rec['reason']}")
+    parts = rec.get("build_in_house_parts") or []
+    add(f"- 需自行開發部分：{_join(parts) if parts else '（無）'}")
+    add("")
+    add("### 後續步驟")
+    add("")
+    for step_i, step in enumerate(rec.get("next_steps", []), start=1):
+        add(f"{step_i}. {step}")
+    add("")
+
+    if warnings:
+        add("## 警告")
+        add("")
+        for w in warnings:
+            prefix = f"[{w['query']}] " if w.get("query") else ""
+            add(f"- {prefix}{w['type']}：{w['detail']}")
+        add("")
+
+    return "\n".join(lines)
+
+
 def render_report(context: Dict[str, Any], out_dir: Path) -> None:
-    from jinja2 import Environment, FileSystemLoader, StrictUndefined
-    template_dir = Path(__file__).resolve().parent / "templates"
-    env = Environment(loader=FileSystemLoader(str(template_dir)),
-                      undefined=StrictUndefined, autoescape=False)
-    template = env.get_template("report.md.jinja2")
-    rendered = template.render(**context)
+    rendered = render_report_text(context)
     (out_dir / "result.md").write_text(rendered, encoding="utf-8")
 
 

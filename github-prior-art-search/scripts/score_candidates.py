@@ -3,7 +3,6 @@
 from typing import Any, Dict, List, Optional
 
 from common import load_config, term_matches, tokenize, truncate_text
-from dateutil import parser as dateutil_parser
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +108,9 @@ def days_since(pushed_at: str, now_ts: Optional[float] = None) -> Optional[int]:
     if not pushed_at:
         return None
     try:
-        pushed_dt = dateutil_parser.isoparse(pushed_at)
+        # GitHub API 回傳 ISO 8601（如 2026-08-01T00:00:00Z），
+        # Python 3.9 的 fromisoformat 不認得 Z 後綴，先轉為 +00:00。
+        pushed_dt = datetime.fromisoformat(str(pushed_at).strip().replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
     now = datetime.fromtimestamp(now_ts, tz=timezone.utc) \
