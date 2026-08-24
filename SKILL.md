@@ -12,7 +12,7 @@ compatibility: >-
   network access to api.github.com, and the GITHUB_TOKEN environment variable.
 license: MIT
 metadata:
-  version: "1.3.0"
+  version: "2.0.0"
   execution_mode: script_first
 ---
 
@@ -20,19 +20,34 @@ metadata:
 
 ## 核心原則
 
-1. **所有硬性條件由腳本判斷**——星數 <100 直接忽略；archived/disabled 直接忽略；
+1. **搜尋查詢完全由你設計**——腳本不生成、不補齊、不臆造任何查詢。
+2. **所有硬性條件由腳本判斷**——星數 <100 直接忽略；archived/disabled 直接忽略；
    授權風險由腳本標記；依賴清單由腳本解析寫入輸出。
-2. **模型不得產生最終採用結論**——你只能針對腳本結果產生文字摘要。
-3. 所有腳本輸出必須可重現；腳本無法取得資料時會明確標記 `partial` 或 `failed`。
+3. **模型不得產生最終採用結論**——你只能針對腳本結果產生文字摘要。
+4. 所有腳本輸出必須可重現；腳本無法取得資料時會明確標記 `partial` 或 `failed`。
 
 ## 執行流程
 
-### 步驟 1：準備輸入 JSON
+### 步驟 1：設計搜尋查詢並準備輸入 JSON
 
-向使用者收集必要欄位後寫入暫存檔（以下僅為格式示範，欄位值一律取自使用者的實際專案）：
+依專案的目的、規劃與功能需求設計 `search_queries`：
+
+- 用英文技術詞彙（「滑動視窗限流」→ `sliding window rate limit`）。
+- 可用 GitHub 搜尋語法：`topic:rate-limiting`（連字號 slug，不接受空白）、
+  `language:go`、`in:name`、`in:readme`。星數門檻由腳本附加。
+- 涵蓋不同切入角度，而非同一句話的變形。
+- 上限見 `config.search.max_queries`（預設 10），超過的部分截斷並記入警告。
 
 ```json
 {
+  "search_queries": [
+    "rate limiter middleware",
+    "sliding window rate limit",
+    "distributed rate limiting redis",
+    "topic:rate-limiting",
+    "golang throttling library",
+    "token bucket implementation go"
+  ],
   "project_goal": "API 速率限制中介層",
   "core_features": ["滑動視窗限流", "多租戶配額", "Redis 儲存"],
   "tech_stack": ["Go", "Redis"],
@@ -41,24 +56,20 @@ metadata:
   "exclude_repos": [],
   "max_candidates": 8,
   "min_stars": 100,
-  "last_commit_within_days": 730,
-  "extra_keywords": [
-    "rate limiter middleware",
-    "sliding window rate limit",
-    "topic:rate-limiting"
-  ]
+  "last_commit_within_days": 730
 }
 ```
 
-- 必填：`project_goal`、`core_features`
+欄位分成兩種用途，不要混淆：
+
+| 欄位 | 用途 |
+|---|---|
+| `search_queries` | **拿去 GitHub 搜尋**。必填，由你設計；空值腳本直接失敗 |
+| `project_goal`、`core_features`、`tech_stack`、`domain`、`architecture_style` | **評分依據**：腳本用它們計算候選的相關度。不參與搜尋 |
+
+- 必填：`search_queries`、`project_goal`、`core_features`
 - `min_stars` 即使設低於 100，腳本仍強制使用 100
-- **`extra_keywords` 是搜尋查詢的唯一來源，請務必填寫。** 把使用者的描述轉成
-  3–8 條**英文**技術關鍵字：GitHub 語料以英文為主，非英文查詢命中率極低，而
-  只有你能把「滑動視窗限流」翻成 `sliding window rate limit`。可善用 GitHub
-  搜尋語法（如 `topic:rate-limiting`，注意 topic 是連字號 slug、不接受空白）。
-  這是你唯一允許參與的搜尋環節——腳本不會替你臆造查詢。
-- 未提供 `extra_keywords` 時，腳本只會以 `project_goal` 原文查詢一次，並記入
-  `no_extra_keywords` 警告、將 `status` 標為 `partial`。
+- 以上 JSON 為格式示範，欄位值取自使用者的實際專案
 
 ### 步驟 2：執行腳本
 
@@ -99,7 +110,7 @@ python3 main.py --input /tmp/prior_art_input.json --output-dir output/github-pri
 ## 異常處理
 
 - `status=partial`：部分查詢或解析失敗，詳見 `warnings`，照實告知使用者。
-- 無候選 → 建議 `build_in_house`。
-- 缺少 `GITHUB_TOKEN` 或 Python 版本過低 → 腳本以非零結束並回報原因。
-
-詳細規則（評分訊號、決策優先序、reusability 定義）見 [references/RULES.md](references/RULES.md)。
+- 無候選 → 建議 `build_in_house`。可重新設計 `search_queries` 再跑一次，
+  並告知使用者這是第二輪查詢。
+- 缺少 `GITHUB_TOKEN`、Python 版本過低、`search_queries` 為空 → 腳本以非零結束
+  並回報原因。

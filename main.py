@@ -16,7 +16,7 @@ from scripts.render_report import write_outputs
 MINIMUM_PYTHON = (3, 9)
 PARTIAL_WARNING_TYPES = ("rate_limit", "search_failed", "tree_fetch_failed",
                          "release_check_failed", "dependency_parsing_failed",
-                         "no_extra_keywords")
+                         "search_queries_truncated")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -41,7 +41,8 @@ def build_search_queries(input_data: Dict[str, Any]
     queries, warnings = gh.build_queries(input_data)
     if not queries:
         raise ScriptFailure(
-            "無法產生任何搜尋查詢，請提供 extra_keywords 或更具體的 project_goal。",
+            "search_queries 為空：搜尋查詢須由呼叫端依專案目的與功能需求設計，"
+            "腳本不代為生成。",
             "no_queries")
     return queries, warnings
 
