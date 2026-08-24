@@ -1,4 +1,12 @@
 {
+  "search_queries": [
+    "rate limiter middleware",
+    "sliding window rate limit",
+    "distributed rate limiting redis",
+    "topic:rate-limiting",
+    "golang throttling library",
+    "token bucket implementation go"
+  ],
   "project_goal": "API 速率限制中介層",
   "core_features": [
     "滑動視窗限流",
@@ -14,13 +22,5 @@
   "exclude_repos": [],
   "max_candidates": 8,
   "min_stars": 100,
-  "last_commit_within_days": 730,
-  "extra_keywords": [
-    "rate limiter middleware",
-    "sliding window rate limit",
-    "distributed rate limiting redis",
-    "topic:rate-limiting",
-    "golang throttling library",
-    "multi tenant quota"
-  ]
+  "last_commit_within_days": 730
 }

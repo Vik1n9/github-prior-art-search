@@ -9,6 +9,7 @@ agent: build
 $ARGUMENTS
 ```
 
-依技能的 `SKILL.md` 流程執行——該檔是流程的唯一來源，不要在此重複或改寫。
+依技能的 `SKILL.md` 流程執行，其中 `search_queries` 由你設計。
+
 若使用者輸入不足以推得具體的 `project_goal` 與 `core_features`，先提問補齊，
 不得自行虛構。

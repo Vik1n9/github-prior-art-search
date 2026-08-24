@@ -6,17 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from .common import ScriptFailure, http_get_json, http_get_text, load_config
 
 REQUIRED_INPUTS = ("project_goal", "core_features")
-LIST_INPUTS = ("tech_stack", "architecture_style", "exclude_repos", "extra_keywords")
+LIST_INPUTS = ("tech_stack", "architecture_style", "exclude_repos", "search_queries")
 INT_INPUTS = ("max_candidates", "min_stars", "last_commit_within_days")
 
 RAW_BASE = "https://raw.githubusercontent.com"
 README_NAMES = {"readme", "readme.md", "readme.txt", "readme.rst"}
-NO_KEYWORDS_WARNING = {
-    "type": "no_extra_keywords",
-    "detail": "輸入未提供 extra_keywords，僅以 project_goal 原文查詢。"
-              "GitHub 語料以英文為主，非英文的 project_goal 命中率極低，"
-              "請補上英文關鍵字以取得有意義的結果。",
-}
+QUERIES_TRUNCATED = "search_queries_truncated"
 
 
 def validate_input(data: Any) -> Dict[str, Any]:
@@ -35,6 +30,16 @@ def validate_input(data: Any) -> Dict[str, Any]:
     if features is not None and (not isinstance(features, list)
                                  or not all(isinstance(x, str) for x in features)):
         errors.append("core_features 必須是字串陣列")
+
+    queries = data.get("search_queries")
+    if queries is None:
+        errors.append("缺少必要欄位: search_queries"
+                      "（搜尋查詢須由呼叫端依專案目的與功能需求設計，腳本不代為生成）")
+    elif not isinstance(queries, list) or not all(isinstance(x, str) for x in queries):
+        errors.append("search_queries 必須是字串陣列")
+    elif not any(x.strip() for x in queries):
+        errors.append("search_queries 不得為空"
+                      "（搜尋查詢須由呼叫端依專案目的與功能需求設計，腳本不代為生成）")
 
     for field in LIST_INPUTS:
         if data.get(field) is not None and not isinstance(data[field], list):
@@ -71,21 +76,21 @@ def build_queries(input_data: Dict[str, Any]
     queries: List[str] = []
     seen: set = set()
 
-    def add(query: str) -> None:
-        query = _normalize(str(query))
+    for raw in input_data.get("search_queries") or []:
+        query = _normalize(str(raw))
         if query and query.lower() not in seen:
             seen.add(query.lower())
             queries.append(query)
 
-    for keyword in input_data.get("extra_keywords") or []:
-        add(keyword)
-
+    cap = int(load_config()["search"]["max_queries"])
     warnings: List[Dict[str, str]] = []
-    if not queries:
-        add(input_data.get("project_goal") or "")
-        warnings.append(dict(NO_KEYWORDS_WARNING))
-
-    return queries[:int(load_config()["search"]["max_queries"])], warnings
+    if len(queries) > cap:
+        warnings.append({
+            "type": QUERIES_TRUNCATED,
+            "detail": f"輸入提供 {len(queries)} 條查詢，超過單次執行上限 {cap} 條，"
+                      f"僅執行前 {cap} 條。",
+        })
+    return queries[:cap], warnings
 
 
 def ensure_star_filter(query: str, min_stars: int) -> str:
