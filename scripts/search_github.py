@@ -120,14 +120,14 @@ def build_queries(input_data: Dict[str, Any]) -> List[str]:
             seen.add(query.lower())
             queries.append(query)
 
+    for keyword in input_data.get("extra_keywords") or []:
+        add(str(keyword))
+
     for item in templates:
         spec = item if isinstance(item, dict) else {}
         template = item["template"] if isinstance(item, dict) else str(item)
         for expanded in _expand_template(template, spec, inputs):
             add(expanded)
-
-    for keyword in input_data.get("extra_keywords") or []:
-        add(str(keyword))
 
     return queries[:int(load_config()["search"]["max_queries"])]
 

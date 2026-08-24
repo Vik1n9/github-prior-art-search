@@ -43,7 +43,7 @@ cp command/github-search.md ~/.config/opencode/command/
 ```
 
 Then invoke from any project with `/github-search <project goal + features + tech stack>`,
-e.g. `/github-search 遊戲活動配置後台，活動配置／獎勵發放，TypeScript Node.js`.
+e.g. `/github-search a Go API rate limiter with sliding-window and Redis storage`.
 
 The skill itself must be installed globally as well
 (`~/.config/opencode/skills/github-prior-art-search/`).

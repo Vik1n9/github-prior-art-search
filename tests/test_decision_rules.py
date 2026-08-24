@@ -92,29 +92,29 @@ class TestBuildRecommendation:
 class TestFullScorePipeline:
     def test_calculate_and_risk_integration(self, config):
         repo_meta = {
-            "full_name": "acme/task-admin-dashboard",
-            "name": "task-admin-dashboard",
-            "description": "Admin dashboard for game task ops: activity configuration, "
-                           "reward engine and approval workflow.",
-            "topics": ["admin-dashboard", "game-ops", "workflow"],
-            "language": "TypeScript",
+            "full_name": "acme/go-rate-limiter",
+            "name": "go-rate-limiter",
+            "description": "Sliding window rate limiter for Go with Redis storage "
+                           "and multi-tenant quota tracking.",
+            "topics": ["rate-limiting", "redis", "middleware"],
+            "language": "Go",
             "pushed_at": "2026-07-01T00:00:00Z",
             "archived": False,
         }
         input_data = {
-            "project_goal": "admin dashboard for game task ops",
-            "core_features": ["task configuration", "approval workflow"],
-            "tech_stack": ["TypeScript"],
+            "project_goal": "sliding window rate limiter for Go",
+            "core_features": ["sliding window", "quota tracking"],
+            "tech_stack": ["Go"],
         }
         license_info = {"spdx_id": "MIT", "category": "preferred",
                         "license_fit_score": 100, "action": "allow_reuse",
                         "risk_level": "low", "source": "api_field"}
         deps = {"total_count": 30, "unpinned_count": 2, "lockfile_present": True}
         s = calculate_scores(input_data, repo_meta, license_info, deps,
-                             "Task admin dashboard. Install with npm install. "
-                             "Usage examples in docs/. Configure tasks and rewards.",
-                             ["src/index.ts", ".github/workflows/ci.yml",
-                              "package.json", "examples/demo.ts"],
+                             "Go rate limiter. Install with go get. "
+                             "Usage examples in docs/. Sliding window and quota tracking.",
+                             ["src/limiter.go", ".github/workflows/ci.yml",
+                              "go.mod", "examples/demo.go"],
                              has_release=True, now_ts=1787500000.0, config=config)
         assert 0 <= s["total"] <= 100
         assert s["relevance"] >= 70

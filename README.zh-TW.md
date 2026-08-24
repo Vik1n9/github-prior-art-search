@@ -39,7 +39,7 @@ cp command/github-search.md ~/.config/opencode/command/
 ```
 
 之後在任何專案輸入 `/github-search <專案目標 + 核心功能 + 技術堆疊>` 即可，
-例如：`/github-search 遊戲活動配置後台，活動配置／獎勵發放，TypeScript Node.js`。
+例如：`/github-search API 速率限制中介層，滑動視窗限流／多租戶配額，Go Redis`。
 
 技能本體也需安裝於全域（`~/.config/opencode/skills/github-prior-art-search/`）。
 

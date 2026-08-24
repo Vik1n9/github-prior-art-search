@@ -29,14 +29,14 @@ metadata:
 
 ### 步驟 1：準備輸入 JSON
 
-向使用者收集必要欄位後寫入暫存檔：
+向使用者收集必要欄位後寫入暫存檔（以下僅為格式示範，欄位值一律取自使用者的實際專案）：
 
 ```json
 {
-  "project_goal": "遊戲活動配置後台",
-  "core_features": ["活動配置", "任務配置", "獎勵發放", "審核流程"],
-  "tech_stack": ["TypeScript", "Node.js"],
-  "domain": "game_ops",
+  "project_goal": "API 速率限制中介層",
+  "core_features": ["滑動視窗限流", "多租戶配額", "Redis 儲存"],
+  "tech_stack": ["Go", "Redis"],
+  "domain": "rate_limiting",
   "architecture_style": [],
   "exclude_repos": [],
   "max_candidates": 8,
