@@ -22,10 +22,11 @@ GitHub **先行調研與重用檢查** Agent Skill。動手開發之前，先找
 | 評分與重用決策 | 六維度加權評分由程式碼計算 |
 | 模型輸出 | 僅文字摘要；不得新增/刪除候選、更改排序或覆寫決策 |
 
-所有規則皆資料化（`config.json`、`templates/queries.json`），行為可稽核、
-可重現。
+評分權重、授權政策、依賴風險門檻與決策閘門都放在 `config.json`，不改程式碼
+即可稽核與調整；星數門檻與 archived/disabled 過濾則刻意寫死在
+`scripts/search_github.py`，不開放設定。
 
-**零第三方依賴**：僅需 Python 3.9+ 標準庫與 bash——無需 pip / venv。
+**零第三方依賴**：僅需 Python 3.9+ 標準庫——無需 pip / venv。
 
 ## 快速開始
 
@@ -38,79 +39,73 @@ cp command/github-search.md ~/.config/opencode/command/
 ```
 
 之後在任何專案輸入 `/github-search <專案目標 + 核心功能 + 技術堆疊>` 即可，
-例如：`/github-search 遊戲活動配置後台，活動配置／獎勵發放，TypeScript Node.js`。
+例如：`/github-search API 速率限制中介層，滑動視窗限流／多租戶配額，Go Redis`。
 
 技能本體也需安裝於全域（`~/.config/opencode/skills/github-prior-art-search/`）。
 
 ### 手動執行
 
 ```bash
-# 1. 依賴檢查（缺任何必要依賴會拒絕並印出原因）
-bash scripts/check_dependencies.sh
-
-# 2. 設定 token
 export GITHUB_TOKEN=ghp_xxx
-
-# 3. 準備輸入 JSON（見 SKILL.md / input.example.json）後執行
 python3 main.py --input input.example.json --output-dir output/github-prior-art-search
 ```
 
-輸入必填 `project_goal` 與 `core_features`；選填欄位包括 `tech_stack`、
-`domain`、`license_preference`、`exclude_repos`、`extra_keywords`、
-`max_candidates`、`min_stars`（低於 100 一律強制回升為 100）。
+腳本會自行檢查 Python 版本與 `GITHUB_TOKEN`，任一缺失即以非零結束並印出原因。
 
-輸出寫入指定的輸出目錄：
+輸入必填 `project_goal` 與 `core_features`。`extra_keywords` 是實際的搜尋查詢，
+應填 3–8 條英文技術關鍵字；未提供時會退化為單一條 `project_goal` 原文查詢並回報
+`partial`。其餘選填欄位：`tech_stack`、`domain`、`architecture_style`、
+`exclude_repos`、`max_candidates`、`last_commit_within_days`、`min_stars`
+（低於 100 一律強制回升為 100）。
+
+輸出目錄會產生兩個檔案：
 
 | 檔案 | 內容 |
 |---|---|
-| `result.json` | 完整結果（狀態、查詢、候選、建議、警告） |
+| `result.json` | 完整結果：狀態、查詢、候選（含評分／授權／依賴／風險）、建議、警告 |
 | `result.md` | 人類可讀報告 |
-| `candidates.json` | 候選清單，含分數與風險 |
-| `dependencies.json` | 各候選依賴解析結果 |
-| `decision.json` | 主要建議與各候選決策 |
 
-缺少必要輸入或執行失敗時以非零結束；部分失敗時 `status = "partial"`，
-細節記錄在 `warnings`。
+必要輸入缺失或執行失敗時以非零結束；部分失敗則 `status = "partial"`，
+細節記於 `warnings`。
 
-## 執行流程
+## 運作方式
 
 1. 校驗輸入並套用硬性規則（星數門檻 ≥ 100）。
-2. 由模板（`templates/queries.json`）產生搜尋查詢，目標／領域／功能／技術棧
-   佔位符採笛卡兒積展開。
-3. 呼叫 GitHub Search API（處理 rate limit，磁碟快取）。
-4. 本地二次過濾：星數、archived/disabled、黑名單、最後提交天數。
-5. 對前 N 名候選深度分析：檔案樹、README、授權偵測、依賴清單與 lockfile、
-   release。
-6. 計算六維度分數（相關度、重用性、維護活躍度、程式碼品質、文件、授權契合）
-   並做出決策：adopt / fork / use-as-template / reference-only /
-   build-in-house。
+2. 查詢取自 `extra_keywords`——由呼叫端模型從專案描述提煉的英文技術關鍵字。
+   只有模型能把「滑動視窗限流」翻成 `sliding window rate limit`，因此查詢措辭
+   是模型的職責，腳本不臆造查詢。未提供時退回以 `project_goal` 原文查一次，
+   並將該次執行標為 `partial`。
+3. 呼叫 GitHub Search API（處理 rate limit，額度耗盡即提早停止）。
+4. 本地二次過濾：星數、archived/disabled、黑名單、最後提交時間。
+5. 對前 N 名候選深度分析：檔案樹、README、授權辨識、依賴清單與 lockfile、release。
+6. 六維度評分（相關度、重用性、維護活躍度、程式碼品質、文件、授權契合）後
+   決策：adopt／fork／use-as-template／reference-only／build-in-house。
 
 評分訊號與決策門檻的細節見 [references/RULES.md](references/RULES.md)。
 
 ## 測試
 
 ```bash
-python3 -m pytest tests/ -v   # pytest 僅為開發/測試用依賴
+python3 -m pytest tests/ -v   # pytest 僅為開發／測試依賴
 ```
 
-所有測試離線執行（mock GitHub 回應）。
+所有測試離線執行，對 GitHub 回應使用 mock。
 
-## 目錄結構
+## 專案結構
 
 ```
-├── SKILL.md              # Agent Skills 標準技能定義
-├── main.py               # 主入口（執行流程＋報告渲染）
-├── config.json           # 所有規則資料化：硬性規則／評分權重／授權政策／決策門檻
-├── templates/
-│   └── queries.json      # §9 查詢模板（單一事實來源）
+├── SKILL.md              # Agent Skills 標準定義
+├── main.py               # 進入點與流程編排
+├── config.json           # 權重、授權政策、依賴風險、決策門檻
 ├── scripts/
-│   ├── check_dependencies.sh   # 依賴檢查（僅需 bash + Python 3.9+）
-│   ├── common.py               # 設定、快取 HTTP 客戶端（urllib）、文字比對
+│   ├── common.py               # 設定、HTTP 客戶端（urllib）、文字比對
 │   ├── search_github.py        # 輸入校驗、查詢生成、搜尋與過濾
+│   ├── analyze.py              # 單一候選深度分析
 │   ├── parse_license.py        # 授權解析與分類
 │   ├── parse_dependencies.py   # 依賴清單解析
 │   ├── score_candidates.py     # 評分模型
-│   └── build_recommendation.py # 決策規則
+│   ├── build_recommendation.py # 決策規則
+│   └── render_report.py        # result.json / result.md 輸出
 ├── tests/                # pytest（離線）
 └── references/RULES.md   # 規則細節與設計決定
 ```

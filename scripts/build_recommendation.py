@@ -1,17 +1,11 @@
-# -*- coding: utf-8 -*-
-"""腳本決策（§14）：最終採用建議由規則產生，模型不得推翻。
-
-評估優先序（config.decision_rules.evaluation_order）：
-  avoid_due_to_risk > adopt_as_dependency > fork_and_modify
-  > use_as_template > reference_architecture_only
-全數不符 → insufficient_fit；若所有候選皆不符門檻，整體建議 build_in_house。
-"""
 from typing import Any, Dict, List, Optional
 
-from common import load_config
-from score_candidates import overall_dependency_risk
+from .common import load_config
+from .score_candidates import RISK_RANK, overall_dependency_risk
 
-RISK_RANK = {"low": 0, "medium": 1, "high": 2}
+ADOPTABLE_DECISIONS = ("adopt_as_dependency", "fork_and_modify", "use_as_template",
+                       "reference_architecture_only")
+LICENSE_GATED_DECISIONS = ("adopt_as_dependency", "fork_and_modify", "use_as_template")
 
 NEXT_STEPS = {
     "adopt_as_dependency": [
@@ -48,95 +42,90 @@ def _meets(value: float, threshold: Any) -> bool:
     return value >= float(threshold)
 
 
-def _risk_ok(dep_risk: str, max_level: str) -> bool:
-    return RISK_RANK.get(dep_risk, 0) <= RISK_RANK.get(max_level, 1)
+def _dependency_risk_acceptable(dependency_risk: str, max_level: str) -> bool:
+    return RISK_RANK.get(dependency_risk, 0) <= RISK_RANK.get(max_level, 1)
+
+
+def _should_avoid(risks: List[Dict[str, str]], metadata: Dict[str, Any]) -> bool:
+    if metadata.get("archived") is True:
+        return True
+    return any(r.get("type") == "license_risk" and r.get("level") == "high"
+               for r in risks)
+
+
+def _satisfies(rule_name: str, condition: Dict[str, Any], scores: Dict[str, Any],
+               dependency_risk: str) -> bool:
+    if not (_meets(scores["total"], condition["total_score"])
+            and _meets(scores["relevance"], condition["relevance"])):
+        return False
+    if rule_name in LICENSE_GATED_DECISIONS and \
+            not _meets(scores["license_fit"], condition["license_fit"]):
+        return False
+    if "maintenance_activity" in condition and \
+            not _meets(scores["maintenance_activity"], condition["maintenance_activity"]):
+        return False
+    if "dependency_risk_max" in condition and \
+            not _dependency_risk_acceptable(dependency_risk,
+                                            condition["dependency_risk_max"]):
+        return False
+    return True
 
 
 def decide_reuse(scores: Dict[str, Any], risks: List[Dict[str, str]],
                  metadata: Dict[str, Any],
                  config: Optional[Dict[str, Any]] = None) -> str:
-    cfg = config or load_config()
-    rules = cfg["decision_rules"]
-    order = rules["evaluation_order"]
-    dep_risk = overall_dependency_risk(risks)
-    license_risk_high = any(r.get("type") == "license_risk" and r.get("level") == "high"
-                            for r in risks)
+    rules = (config or load_config())["decision_rules"]
+    dependency_risk = overall_dependency_risk(risks)
 
-    for rule_name in order:
+    for rule_name in rules["evaluation_order"]:
         if rule_name == "avoid_due_to_risk":
-            if license_risk_high or metadata.get("archived") is True:
+            if _should_avoid(risks, metadata):
                 return rule_name
             continue
-
-        cond = rules[rule_name]
-        if not (_meets(scores["total"], cond["total_score"])
-                and _meets(scores["relevance"], cond["relevance"])):
-            continue
-        if rule_name in ("adopt_as_dependency", "fork_and_modify", "use_as_template"):
-            if not _meets(scores["license_fit"], cond["license_fit"]):
-                continue
-        if rule_name == "adopt_as_dependency":
-            if (not _meets(scores["maintenance_activity"], cond["maintenance_activity"])
-                    or not _risk_ok(dep_risk, cond["dependency_risk_max"])):
-                continue
-        elif rule_name == "fork_and_modify":
-            if not _meets(scores["maintenance_activity"], cond["maintenance_activity"]):
-                continue
-        return rule_name
+        if _satisfies(rule_name, rules[rule_name], scores, dependency_risk):
+            return rule_name
 
     return "insufficient_fit"
 
 
-def build_recommendation(analyzed: List[Dict[str, Any]], config: Optional[Dict[str, Any]] = None
-                         ) -> Dict[str, Any]:
-    cfg = config or load_config()
-    adoptable = ("adopt_as_dependency", "fork_and_modify", "use_as_template",
-                 "reference_architecture_only")
-
+def build_recommendation(analyzed: List[Dict[str, Any]],
+                         config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ranked = sorted(analyzed, key=lambda c: c["scores"]["total"], reverse=True)
-    best = None
-    for candidate in ranked:
-        if candidate["reuse_decision"] in adoptable:
-            best = candidate
-            break
+    best = next((c for c in ranked
+                 if c["reuse_decision"] in ADOPTABLE_DECISIONS), None)
 
     if best is None:
         reason = "所有候選均未達採用門檻" if analyzed else "搜尋未找到符合條件的候選專案"
-        primary_action = "build_in_house"
-        parts_source: List[str] = []
         return {
-            "primary_action": primary_action,
+            "primary_action": "build_in_house",
             "primary_repository": None,
             "reason": f"{reason}，建議自行開發。",
-            "build_in_house_parts": parts_source,
+            "build_in_house_parts": [],
             "next_steps": NEXT_STEPS["build_in_house"],
         }
 
     decision = best["reuse_decision"]
     scores = best["scores"]
-    reason = (
-        f"{best['repository']} 總分 {scores['total']}（相關度 {scores['relevance']}、"
-        f"維護活躍度 {scores['maintenance_activity']}、授權契合 {scores['license_fit']}），"
-        f"符合 {decision} 規則門檻。"
-    )
     return {
         "primary_action": decision,
         "primary_repository": best["repository"],
-        "reason": reason,
+        "reason": f"{best['repository']} 總分 {scores['total']}"
+                  f"（相關度 {scores['relevance']}、"
+                  f"維護活躍度 {scores['maintenance_activity']}、"
+                  f"授權契合 {scores['license_fit']}），符合 {decision} 規則門檻。",
         "build_in_house_parts": [],
         "next_steps": NEXT_STEPS[decision],
     }
 
 
 def candidate_summary(candidate: Dict[str, Any]) -> str:
-    """腳本產生的結構化摘要（非模型生成）。"""
     scores = candidate["scores"]
-    deps = candidate.get("dependencies") or {}
-    license_info = candidate.get("license") or {}
-    spdx = license_info.get("spdx_id") or "unknown"
+    dependencies = candidate.get("dependencies") or {}
+    spdx = (candidate.get("license") or {}).get("spdx_id") or "unknown"
     return (
         f"{candidate.get('stars', 0)} 星 {candidate.get('language') or '未知語言'}；"
         f"授權 {spdx}（fit={scores.get('license_fit', 0)}）；"
-        f"依賴 {deps.get('total_count', 0)} 筆（未固定 {deps.get('unpinned_count', 0)}）；"
+        f"依賴 {dependencies.get('total_count', 0)} 筆"
+        f"（未固定 {dependencies.get('unpinned_count', 0)}）；"
         f"總分 {scores.get('total', 0)}；決策 {candidate.get('reuse_decision')}。"
     )

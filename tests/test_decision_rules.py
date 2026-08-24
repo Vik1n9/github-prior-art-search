@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-"""§14 決策規則驗收：門檻邊界、優先序、avoid 蓋過 adopt、build_in_house。"""
-from build_recommendation import build_recommendation, decide_reuse
-from score_candidates import calculate_scores, compute_risks
+from scripts.build_recommendation import build_recommendation, decide_reuse
+from scripts.score_candidates import calculate_scores, compute_risks
 
 
 def scores(total=90, relevance=90, license_fit=100, maintenance=90):
@@ -22,7 +20,6 @@ class TestDecideReuse:
     def test_adopt_blocked_by_high_dep_risk(self, config):
         risks = [{"type": "dependency_risk", "level": "high", "detail": ""}]
         result = decide_reuse(scores(), risks, {}, config)
-        # dep_risk=high 擋掉 adopt，落入下一順位
         assert result == "fork_and_modify"
 
     def test_fork_when_below_adopt_relevance(self, config):
@@ -95,36 +92,36 @@ class TestBuildRecommendation:
 class TestFullScorePipeline:
     def test_calculate_and_risk_integration(self, config):
         repo_meta = {
-            "full_name": "acme/task-admin-dashboard",
-            "name": "task-admin-dashboard",
-            "description": "Admin dashboard for game task ops: activity configuration, "
-                           "reward engine and approval workflow.",
-            "topics": ["admin-dashboard", "game-ops", "workflow"],
-            "language": "TypeScript",
+            "full_name": "acme/go-rate-limiter",
+            "name": "go-rate-limiter",
+            "description": "Sliding window rate limiter for Go with Redis storage "
+                           "and multi-tenant quota tracking.",
+            "topics": ["rate-limiting", "redis", "middleware"],
+            "language": "Go",
             "pushed_at": "2026-07-01T00:00:00Z",
             "archived": False,
         }
         input_data = {
-            "project_goal": "admin dashboard for game task ops",
-            "core_features": ["task configuration", "approval workflow"],
-            "tech_stack": ["TypeScript"],
+            "project_goal": "sliding window rate limiter for Go",
+            "core_features": ["sliding window", "quota tracking"],
+            "tech_stack": ["Go"],
         }
         license_info = {"spdx_id": "MIT", "category": "preferred",
                         "license_fit_score": 100, "action": "allow_reuse",
                         "risk_level": "low", "source": "api_field"}
         deps = {"total_count": 30, "unpinned_count": 2, "lockfile_present": True}
         s = calculate_scores(input_data, repo_meta, license_info, deps,
-                             "Task admin dashboard. Install with npm install. "
-                             "Usage examples in docs/. Configure tasks and rewards.",
-                             ["src/index.ts", ".github/workflows/ci.yml",
-                              "package.json", "examples/demo.ts"],
+                             "Go rate limiter. Install with go get. "
+                             "Usage examples in docs/. Sliding window and quota tracking.",
+                             ["src/limiter.go", ".github/workflows/ci.yml",
+                              "go.mod", "examples/demo.go"],
                              has_release=True, now_ts=1787500000.0, config=config)
         assert 0 <= s["total"] <= 100
-        # 名稱、描述、功能、技術棧皆高度命中
         assert s["relevance"] >= 70
         assert s["maintenance_activity"] == 100
 
-        risks = compute_risks(license_info, [], repo_meta, config)
+        risks = compute_risks(license_info, [], repo_meta,
+                              config["defaults"]["last_commit_within_days"])
         assert risks == []
         decision = decide_reuse(s, risks, repo_meta, config)
         assert decision in ("adopt_as_dependency", "fork_and_modify",

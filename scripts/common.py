@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""共用工具：設定載入、環境變數、帶快取的 HTTP 客戶端、文字處理。
-
-零第三方依賴：僅使用 Python 標準庫（urllib / json / hashlib / re）。
-"""
-import hashlib
 import json
 import os
 import re
@@ -11,92 +5,40 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = SKILL_ROOT / "config.json"
 USER_AGENT = "github-prior-art-search"
-
-_CONFIG_CACHE: Optional[Dict[str, Any]] = None
+RATE_LIMIT_STATUSES = (403, 429)
 
 
 class ScriptFailure(Exception):
-    """致命錯誤：技能必須停止並回報原因（§22.1）。"""
-
     def __init__(self, message: str, reason_code: str = "failed"):
         super().__init__(message)
         self.reason_code = reason_code
 
 
+@lru_cache(maxsize=1)
 def load_config() -> Dict[str, Any]:
-    global _CONFIG_CACHE
-    if _CONFIG_CACHE is None:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            _CONFIG_CACHE = json.load(f)
-    return _CONFIG_CACHE
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-# ---------------------------------------------------------------------------
-# SKILL.md frontmatter 解析（受限子集：純量、>- 摺疊區塊、單層巢狀映射）
-# ---------------------------------------------------------------------------
-
-def _parse_scalar(value: str) -> Any:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        return value[1:-1]
-    lowered = value.lower()
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    try:
-        return int(value)
-    except ValueError:
-        return value
-
-
-def _parse_frontmatter(raw: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {}
-    lines = raw.split("\n")
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        i += 1
-        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
-        if not m:
-            continue
-        key, rest = m.group(1), m.group(2).strip()
-        if rest in (">-", ">"):
-            folded: List[str] = []
-            while i < len(lines):
-                nxt = lines[i]
-                if not nxt.strip() or not nxt[:1].isspace():
-                    break
-                folded.append(nxt.strip())
-                i += 1
-            result[key] = " ".join(folded)
-        elif rest == "":
-            nested: Dict[str, Any] = {}
-            while i < len(lines):
-                nm = re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*)$", lines[i])
-                if not nm:
-                    break
-                nested[nm.group(1)] = _parse_scalar(nm.group(2))
-                i += 1
-            result[key] = nested
-        else:
-            result[key] = _parse_scalar(rest)
-    return result
-
-
-def load_skill_metadata() -> Dict[str, Any]:
-    """技能名稱與版本以 SKILL.md frontmatter 為唯一來源（agentskills.io 標準）。"""
+@lru_cache(maxsize=1)
+def load_skill_metadata() -> Dict[str, str]:
     text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-    match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
-    if not match:
+    frontmatter = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    if not frontmatter:
         raise ScriptFailure("SKILL.md 缺少 YAML frontmatter", "invalid_skill")
-    return _parse_frontmatter(match.group(1))
+    block = frontmatter.group(1)
+    name = re.search(r"^name:\s*(\S+)", block, re.M)
+    if not name:
+        raise ScriptFailure("SKILL.md frontmatter 缺少 name 欄位", "invalid_skill")
+    version = re.search(r"^\s+version:\s*[\"']?([^\"'\s]+)", block, re.M)
+    return {"name": name.group(1), "version": version.group(1) if version else ""}
 
 
 def get_github_token() -> str:
@@ -110,21 +52,12 @@ def get_github_token() -> str:
     return token
 
 
-def resolve_dir(env_var: str, default_relative: str) -> Path:
-    value = os.environ.get(env_var, "").strip()
-    p = Path(value) if value else (Path.cwd() / default_relative)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def cache_dir() -> Path:
-    cfg = load_config()
-    return resolve_dir("SKILL_CACHE_DIR", cfg["cache_dir_default"])
-
-
 def output_dir() -> Path:
-    cfg = load_config()
-    return resolve_dir("SKILL_OUTPUT_DIR", cfg["output_dir_default"])
+    configured = os.environ.get("SKILL_OUTPUT_DIR", "").strip()
+    path = Path(configured) if configured else (
+        Path.cwd() / load_config()["output_dir_default"])
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def utc_now_iso() -> str:
@@ -138,47 +71,29 @@ def write_json(path: Path, obj: Any) -> None:
         f.write("\n")
 
 
-def read_json(path: Path) -> Any:
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-# ---------------------------------------------------------------------------
-# HTTP 客戶端：磁碟快取 + rate limit 處理（§22.3 → status=partial）
-# 以 urllib.request 實作，無需第三方套件。
-# ---------------------------------------------------------------------------
-
-class HttpResult:
-    def __init__(self, data: Any = None, error: Optional[Dict[str, str]] = None,
-                 from_cache: bool = False):
-        self.data = data
-        self.error = error          # {"kind": "rate_limit"|"http"|"network", "detail": "..."}
-        self.from_cache = from_cache
-
-    @property
-    def ok(self) -> bool:
-        return self.error is None
-
-
-def _cache_path(url: str, params: Optional[Dict[str, Any]]) -> Path:
-    raw = url + "?" + json.dumps(params or {}, sort_keys=True, ensure_ascii=False)
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", url.split("//", 1)[-1])[:80]
-    return cache_dir() / "api" / f"{safe_name}.{digest}.json"
+class HttpResult(NamedTuple):
+    data: Any = None
+    error: Optional[Dict[str, str]] = None
 
 
 class NetworkError(Exception):
-    """DNS/連線/逾時等網路層錯誤（非 HTTP 狀態錯誤）。"""
+    pass
+
+
+def _request_headers(token: Optional[str], accept: str) -> Dict[str, str]:
+    headers = {"Accept": accept, "User-Agent": USER_AGENT}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _fetch(url: str, headers: Dict[str, str], timeout: float = 30
            ) -> Tuple[int, Any, str]:
-    """GET 回傳 (status_code, headers, body_text)。網路層錯誤丟出 NetworkError。"""
-    req = urllib.request.Request(url, headers=headers, method="GET")
+    request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", None) or resp.getcode()
-            return status, resp.headers, resp.read().decode("utf-8", errors="replace")
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", None) or response.getcode()
+            return status, response.headers, response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read().decode("utf-8", errors="replace")
@@ -189,130 +104,90 @@ def _fetch(url: str, headers: Dict[str, str], timeout: float = 30
         raise NetworkError(str(getattr(exc, "reason", exc)))
 
 
+def _is_rate_limited(status: int, headers: Any) -> bool:
+    if status not in RATE_LIMIT_STATUSES:
+        return False
+    if headers.get("x-ratelimit-remaining") == "0":
+        return True
+    return status == 429 and not headers.get("retry-after")
+
+
+def _rate_limit_wait_seconds(headers: Any, max_wait: int) -> int:
+    reset = headers.get("x-ratelimit-reset")
+    if reset and str(reset).isdigit():
+        return min(max(int(reset) - int(time.time()) + 2, 5), max_wait)
+    retry_after = headers.get("retry-after")
+    if retry_after and str(retry_after).isdigit():
+        return min(max(int(retry_after), 5), max_wait)
+    return max_wait
+
+
 def http_get_json(url: str, token: Optional[str] = None,
-                  params: Optional[Dict[str, Any]] = None,
-                  headers: Optional[Dict[str, str]] = None,
-                  use_cache: bool = True) -> HttpResult:
-    """GET 並回傳 JSON。命中磁碟快取時不發請求。"""
-    cp = _cache_path(url, params)
-    if use_cache and cp.exists():
+                  params: Optional[Dict[str, Any]] = None) -> HttpResult:
+    full_url = f"{url}?{urllib.parse.urlencode(params)}" if params else url
+    headers = _request_headers(token, "application/vnd.github+json")
+    max_wait = int(load_config()["search"]["rate_limit_max_wait_seconds"])
+
+    for attempt in range(2):
         try:
-            return HttpResult(data=read_json(cp), from_cache=True)
-        except Exception:
-            pass  # 快取損毀則重新抓取
-
-    full_url = url
-    if params:
-        full_url = url + "?" + urllib.parse.urlencode(params)
-
-    base_headers = {"Accept": "application/vnd.github+json",
-                    "User-Agent": USER_AGENT}
-    if token:
-        base_headers["Authorization"] = f"Bearer {token}"
-    if headers:
-        base_headers.update(headers)
-
-    cfg = load_config()["search"]
-    max_wait = int(cfg.get("rate_limit_max_wait_seconds", 130))
-
-    for attempt in (0, 1):  # rate limit 時最多重試一次
-        try:
-            status, hdrs, text = _fetch(full_url, base_headers)
+            status, response_headers, text = _fetch(full_url, headers)
         except NetworkError as exc:
             return HttpResult(error={"kind": "network", "detail": str(exc)})
 
         if status == 200:
             try:
-                data = json.loads(text)
+                return HttpResult(data=json.loads(text))
             except ValueError:
                 return HttpResult(error={"kind": "http", "detail": "回應非 JSON"})
-            if use_cache:
-                write_json(cp, data)
-            return HttpResult(data=data)
 
-        if status in (403, 429) and attempt == 0:
-            remaining = hdrs.get("x-ratelimit-remaining")
-            reset_hdr = hdrs.get("x-ratelimit-reset")
-            retry_after = hdrs.get("retry-after")
-            is_rate_limit = (remaining == "0") or (
-                status == 429 and not retry_after)
-            if is_rate_limit:
-                wait = max_wait
-                if reset_hdr and reset_hdr.isdigit():
-                    wait = min(max(int(reset_hdr) - int(time.time()) + 2, 5), max_wait)
-                elif retry_after and retry_after.isdigit():
-                    wait = min(max(int(retry_after), 5), max_wait)
-                time.sleep(wait)
-                continue
+        if not _is_rate_limited(status, response_headers):
             return HttpResult(error={"kind": "http",
                                      "detail": f"HTTP {status}: {text[:200]}"})
-
-        return HttpResult(error={"kind": "http",
-                                 "detail": f"HTTP {status}: {text[:200]}"})
+        if attempt == 0:
+            time.sleep(_rate_limit_wait_seconds(response_headers, max_wait))
 
     return HttpResult(error={"kind": "rate_limit",
                              "detail": "GitHub API rate limit，重試後仍失敗"})
 
 
-def http_get_text(url: str, token: Optional[str] = None,
-                  accept: str = "text/plain; charset=utf-8") -> Tuple[Optional[str], Optional[Dict[str, str]]]:
-    """抓取純文字內容（README、依賴清單）。回傳 (text, error)。"""
-    headers = {"Accept": accept, "User-Agent": USER_AGENT}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+def http_get_text(url: str, token: Optional[str] = None
+                  ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    headers = _request_headers(token, "text/plain; charset=utf-8")
     try:
-        status, _hdrs, text = _fetch(url, headers)
+        status, _headers, text = _fetch(url, headers)
     except NetworkError as exc:
         return None, {"kind": "network", "detail": str(exc)}
     if status == 200:
         return text, None
     if status == 404:
-        return None, None  # 檔案不存在不算錯誤
+        return None, None
     return None, {"kind": "http", "detail": f"HTTP {status} for {url}"}
 
 
-# ---------------------------------------------------------------------------
-# 文字處理：分詞與中英混合比對
-# ---------------------------------------------------------------------------
-
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_+.#-]+")
+_CJK_CHUNK_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
 
 
 def tokenize(text: str) -> List[str]:
-    tokens = []
-    for tok in _TOKEN_RE.findall((text or "").lower()):
-        tok = tok.strip(".-_+#")
-        if tok:
-            tokens.append(tok)
-    # CJK 連續段落整段保留，供子字串比對
-    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text or ""):
-        tokens.append(chunk)
+    text = text or ""
+    tokens = [tok for tok in
+              (raw.strip(".-_+#") for raw in _TOKEN_RE.findall(text.lower()))
+              if tok]
+    tokens.extend(_CJK_CHUNK_RE.findall(text))
     return tokens
 
 
 def term_matches(term: str, haystack: str) -> bool:
-    """英文以詞邊界比對，CJK 以子字串比對。"""
     term = (term or "").strip().lower()
-    hay = (haystack or "").lower()
+    haystack = (haystack or "").lower()
     if not term:
         return False
     if _CJK_RE.search(term):
-        return term in hay
-    return re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", hay) is not None
+        return term in haystack
+    pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
+    return re.search(pattern, haystack) is not None
 
 
-def any_term_matches(terms: List[str], text: str) -> bool:
-    return any(term_matches(t, text) for t in terms)
-
-
-def ensure_list(value: Any) -> List[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-def truncate_text(text: str, limit: int = 20000) -> str:
+def truncate_text(text: Optional[str], limit: int = 30000) -> str:
     return (text or "")[:limit]

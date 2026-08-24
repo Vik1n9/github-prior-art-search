@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
-"""§12 依賴解析驗收：清單偵測、pinned 判定、統計與風險門檻。"""
 import pytest
 
-from parse_dependencies import (analyze_dependencies, build_dependency_list,
-                               dependency_risks, find_lockfiles, find_manifests,
-                               is_pinned_version, summarize_dependencies)
+from scripts.parse_dependencies import (analyze_dependencies, build_dependency_list,
+                                        dependency_risks, find_lockfiles,
+                                        find_manifests, is_pinned_version,
+                                        parse_cargo_toml, parse_gradle,
+                                        summarize_dependencies)
 
 
 class TestPinnedDetection:
@@ -72,7 +72,8 @@ class TestParsers:
 class TestSummaryAndRisks:
     def _summary(self, total, unpinned, lockfile=True):
         return {
-            "manifests_found": ["npm"], "lockfiles_found": ["package-lock.json"] if lockfile else [],
+            "manifests_found": ["npm"],
+            "lockfiles_found": ["package-lock.json"] if lockfile else [],
             "lockfile_present": lockfile, "runtime_count": total, "dev_count": 0,
             "total_count": total, "unpinned_count": unpinned, "details": [],
         }
@@ -105,3 +106,32 @@ class TestSummaryAndRisks:
         summary, warnings = analyze_dependencies([], lambda p: None)
         assert summary["total_count"] == 0
         assert warnings == []
+
+
+class TestDevDependenciesAreKept:
+    def test_cargo_dev_and_build_dependencies(self):
+        parsed = parse_cargo_toml(
+            '[dependencies]\nserde = "1.0.100"\n'
+            '[dev-dependencies]\ncriterion = "0.5"\n'
+            '[build-dependencies]\ncc = "1.0"\n')
+        assert [d["name"] for d in parsed["runtime"]] == ["serde"]
+        assert sorted(d["name"] for d in parsed["dev"]) == ["cc", "criterion"]
+
+    def test_gradle_test_scope_is_dev(self):
+        parsed = parse_gradle(
+            "dependencies {\n"
+            "  implementation 'org.springframework:spring-core:5.3.0'\n"
+            "  testImplementation 'junit:junit:4.13'\n"
+            "}")
+        assert [d["name"] for d in parsed["runtime"]] == ["org.springframework:spring-core"]
+        assert [d["name"] for d in parsed["dev"]] == ["junit:junit"]
+
+    def test_dev_dependencies_reach_the_summary(self):
+        manifests = {"rust": ["Cargo.toml"]}
+        contents = {"Cargo.toml": '[dependencies]\nserde = "1.0.100"\n'
+                                  '[dev-dependencies]\ncriterion = "0.5"\n'}
+        summary = summarize_dependencies(
+            build_dependency_list(manifests, contents), [], manifests)
+        assert summary["runtime_count"] == 1
+        assert summary["dev_count"] == 1
+        assert summary["total_count"] == 2
