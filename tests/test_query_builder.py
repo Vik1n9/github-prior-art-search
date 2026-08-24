@@ -1,6 +1,4 @@
-# -*- coding: utf-8 -*-
-"""§9 驗收：查詢由 templates/queries.json 模板產生（單一事實來源）。"""
-from search_github import build_queries
+from scripts.search_github import build_queries
 
 
 FULL_INPUT = {

@@ -1,21 +1,21 @@
-# -*- coding: utf-8 -*-
-"""GitHub 搜尋：輸入校驗、模板化查詢生成（§9）、API 查詢與本地二次過濾（§10）。"""
 import itertools
 import json
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from common import (ScriptFailure, http_get_json, http_get_text, load_config,
-                    tokenize)
+from .common import ScriptFailure, http_get_json, http_get_text, load_config, tokenize
 
 REQUIRED_INPUTS = ("project_goal", "core_features")
+LIST_INPUTS = ("tech_stack", "architecture_style", "exclude_repos", "extra_keywords")
+INT_INPUTS = ("max_candidates", "min_stars", "last_commit_within_days")
 
+RAW_BASE = "https://raw.githubusercontent.com"
+README_NAMES = {"readme", "readme.md", "readme.txt", "readme.rst"}
+QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.json"
 
-# ---------------------------------------------------------------------------
-# 輸入校驗（§6）
-# ---------------------------------------------------------------------------
 
 def validate_input(data: Any) -> Dict[str, Any]:
     if not isinstance(data, dict):
@@ -30,20 +30,19 @@ def validate_input(data: Any) -> Dict[str, Any]:
         errors.append("project_goal 必須是字串")
 
     features = data.get("core_features")
-    if features is not None:
-        if not isinstance(features, list) or not all(isinstance(x, str) for x in features):
-            errors.append("core_features 必須是字串陣列")
+    if features is not None and (not isinstance(features, list)
+                                 or not all(isinstance(x, str) for x in features)):
+        errors.append("core_features 必須是字串陣列")
 
-    for list_field in ("tech_stack", "architecture_style", "license_preference",
-                       "exclude_repos", "extra_keywords"):
-        if list_field in data and data[list_field] is not None and \
-                not isinstance(data[list_field], list):
-            errors.append(f"{list_field} 必須是陣列")
+    for field in LIST_INPUTS:
+        if data.get(field) is not None and not isinstance(data[field], list):
+            errors.append(f"{field} 必須是陣列")
 
-    for int_field in ("max_candidates", "min_stars", "last_commit_within_days"):
-        if data.get(int_field) is not None and not isinstance(data[int_field], int):
-            errors.append(f"{int_field} 必須是整數")
-    if isinstance(data.get("domain"), str) is False and data.get("domain") is not None:
+    for field in INT_INPUTS:
+        if data.get(field) is not None and not isinstance(data[field], int):
+            errors.append(f"{field} 必須是整數")
+
+    if data.get("domain") is not None and not isinstance(data["domain"], str):
         errors.append("domain 必須是字串")
 
     if errors:
@@ -52,102 +51,85 @@ def validate_input(data: Any) -> Dict[str, Any]:
 
 
 def effective_min_stars(input_data: Dict[str, Any]) -> int:
-    """即使輸入低於 100，仍強制使用 100（§6 硬性規則）。"""
     floor = int(load_config()["defaults"]["enforced_min_stars"])
-    raw = input_data.get("min_stars") or floor
-    return max(int(raw), floor)
+    return max(int(input_data.get("min_stars") or floor), floor)
 
 
-# ---------------------------------------------------------------------------
-# 模板化查詢生成（§9）：模板定義於 templates/queries.json，避免與程式碼漂移
-# ---------------------------------------------------------------------------
-
-_QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.json"
-_QUERIES_CACHE: Optional[Dict[str, Any]] = None
+def effective_max_age_days(input_data: Dict[str, Any]) -> int:
+    configured = int(load_config()["defaults"]["last_commit_within_days"])
+    return int(input_data.get("last_commit_within_days") or configured)
 
 
-def _queries_config() -> Dict[str, Any]:
-    global _QUERIES_CACHE
-    if _QUERIES_CACHE is None:
-        with open(_QUERIES_PATH, "r", encoding="utf-8") as f:
-            _QUERIES_CACHE = json.load(f)
-    return _QUERIES_CACHE
+def _normalize(query: str) -> str:
+    return re.sub(r"\s+", " ", query).strip()
 
 
-def _first_words(text: str, count: int = 3) -> str:
-    tokens = tokenize(text)
-    return " ".join(tokens[:count])
+def _first_words(text: str, count: int) -> str:
+    return " ".join(tokenize(text)[:count])
+
+
+def _placeholder_values(name: str, spec: Dict[str, Any],
+                        inputs: Dict[str, Any]) -> List[str]:
+    if name == "goal_first_words":
+        return [_first_words(inputs["goal"], 3)]
+    if name == "domain":
+        return [inputs["domain"]]
+    if name == "feature":
+        limit = int(spec.get("feature_limit", 1))
+        return [_first_words(f, 2) for f in inputs["features"][:limit]]
+    if name == "tech_stack":
+        limit = int(spec.get("stack_limit", 1))
+        return inputs["stacks"][:limit]
+    return []
 
 
 def _expand_template(template: str, spec: Dict[str, Any],
-                     goal: str, features: List[str],
-                     domain: str, stacks: List[str]) -> List[str]:
-    """展開單一模板：多值佔位符採笛卡兒積；任一佔位符無值回傳空清單。"""
-    tokens = re.findall(r"\{(\w+)\}", template)
-    options: Dict[str, List[str]] = {}
-    for token in tokens:
-        if token == "goal_first_words":
-            value = _first_words(goal, 3)
-            if not value:
-                return []
-            options[token] = [value]
-        elif token == "domain":
-            if not domain:
-                return []
-            options[token] = [domain]
-        elif token == "feature":
-            limit = int(spec.get("feature_limit", 1))
-            values = [w for w in (_first_words(f, 2) for f in features[:limit]) if w]
-            if not values:
-                return []
-            options[token] = values
-        elif token == "tech_stack":
-            limit = int(spec.get("stack_limit", 1))
-            values = [s for s in stacks[:limit] if s]
-            if not values:
-                return []
-            options[token] = values
-        else:
+                     inputs: Dict[str, Any]) -> List[str]:
+    names = re.findall(r"\{(\w+)\}", template)
+    choices: List[List[str]] = []
+    for name in names:
+        values = [v for v in _placeholder_values(name, spec, inputs) if v]
+        if not values:
             return []
+        choices.append(values)
 
-    rendered: List[str] = []
-    for combo in itertools.product(*(options[t] for t in tokens)):
+    expanded: List[str] = []
+    for combination in itertools.product(*choices):
         query = template
-        for token, value in zip(tokens, combo):
-            query = query.replace("{" + token + "}", value)
-        query = re.sub(r"\s+", " ", query).strip()
-        if query:
-            rendered.append(query)
-    return rendered
+        for name, value in zip(names, combination):
+            query = query.replace("{" + name + "}", value)
+        expanded.append(_normalize(query))
+    return [q for q in expanded if q]
 
 
 def build_queries(input_data: Dict[str, Any]) -> List[str]:
-    cfg = load_config()
-    cap = int(cfg["search"].get("max_queries", 10))
-
-    goal = (input_data.get("project_goal") or "").strip()
-    features: List[str] = [f for f in input_data.get("core_features", []) if f]
-    domain = (input_data.get("domain") or "").strip().replace("_", " ")
-    stacks: List[str] = list(input_data.get("tech_stack") or [])
-    extra: List[str] = list(input_data.get("extra_keywords") or [])
+    inputs = {
+        "goal": (input_data.get("project_goal") or "").strip(),
+        "features": [f for f in input_data.get("core_features", []) if f],
+        "domain": (input_data.get("domain") or "").strip().replace("_", " "),
+        "stacks": [s for s in (input_data.get("tech_stack") or []) if s],
+    }
+    templates = json.loads(QUERIES_PATH.read_text(encoding="utf-8"))["templates"]
 
     queries: List[str] = []
+    seen: set = set()
 
-    def add(q: str) -> None:
-        q = re.sub(r"\s+", " ", q).strip()
-        if q and q.lower() not in {x.lower() for x in queries}:
-            queries.append(q)
+    def add(query: str) -> None:
+        query = _normalize(query)
+        if query and query.lower() not in seen:
+            seen.add(query.lower())
+            queries.append(query)
 
-    for item in _queries_config()["templates"]:
-        template = item["template"] if isinstance(item, dict) else str(item)
+    for item in templates:
         spec = item if isinstance(item, dict) else {}
-        for expanded in _expand_template(template, spec, goal, features, domain, stacks):
+        template = item["template"] if isinstance(item, dict) else str(item)
+        for expanded in _expand_template(template, spec, inputs):
             add(expanded)
 
-    for kw in extra:
-        add(kw)
+    for keyword in input_data.get("extra_keywords") or []:
+        add(str(keyword))
 
-    return queries[:cap]
+    return queries[:int(load_config()["search"]["max_queries"])]
 
 
 def ensure_star_filter(query: str, min_stars: int) -> str:
@@ -156,162 +138,123 @@ def ensure_star_filter(query: str, min_stars: int) -> str:
     return f"{query} stars:>={min_stars}"
 
 
-# ---------------------------------------------------------------------------
-# 搜尋與過濾（§10）
-# ---------------------------------------------------------------------------
-
-class SearchState:
-    """跨查詢共享的狀態：rate limit 是否已耗盡。"""
-
-    def __init__(self) -> None:
-        self.rate_limited = False
-
-
-def search_repositories(query: str, token: str, min_stars: int,
-                        state: Optional[SearchState] = None
+def search_repositories(query: str, token: str, min_stars: int
                         ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, str]]]:
-    cfg = load_config()["search"]
-    params = {
+    search = load_config()["search"]
+    result = http_get_json(search["endpoint"], token=token, params={
         "q": ensure_star_filter(query, min_stars),
-        "sort": cfg["sort"],
-        "order": cfg["order"],
-        "per_page": cfg["per_page"],
-    }
-    result = http_get_json(cfg["endpoint"], token=token, params=params)
+        "sort": search["sort"],
+        "order": search["order"],
+        "per_page": search["per_page"],
+    })
     if result.error:
-        if result.error["kind"] == "rate_limit" and state is not None:
-            state.rate_limited = True
         return [], result.error
     items = result.data.get("items", []) if isinstance(result.data, dict) else []
     return items, None
 
 
-def filter_repositories(items: List[Dict[str, Any]], exclude_repos: List[str],
-                        now_ts: Optional[float] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    """本地二次過濾（§10.2、§10.3）：星數/archived/disabled/黑名單/最後提交天數。"""
-    from datetime import datetime, timezone
+def _days_since_push(pushed_at: str, now_ts: float) -> Optional[int]:
+    try:
+        pushed = datetime.strptime(pushed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return (datetime.fromtimestamp(now_ts, tz=timezone.utc) - pushed).days
 
-    cfg = load_config()
-    rules = cfg["hard_rules"]
-    floor = int(cfg["defaults"]["enforced_min_stars"])
-    max_age_days = int(cfg["defaults"]["last_commit_within_days"])
+
+def _discard_reason(repo: Dict[str, Any], floor: int, exclude: set,
+                    max_age_days: int, now_ts: float) -> Optional[str]:
+    if repo.get("stargazers_count", 0) < floor:
+        return f"stars<{floor}"
+    if repo.get("archived") is True:
+        return "archived"
+    if repo.get("disabled", False) is True:
+        return "disabled"
+    if repo.get("full_name", "").lower() in exclude or \
+            (repo.get("html_url") or "").lower() in exclude:
+        return "excluded"
+    pushed_at = repo.get("pushed_at")
+    if pushed_at and max_age_days:
+        days = _days_since_push(pushed_at, now_ts)
+        if days is not None and days > max_age_days:
+            return f"last_commit>{max_age_days}d"
+    return None
+
+
+def filter_repositories(items: List[Dict[str, Any]], exclude_repos: List[str],
+                        max_age_days: Optional[int] = None,
+                        now_ts: Optional[float] = None
+                        ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    config = load_config()
+    floor = int(config["defaults"]["enforced_min_stars"])
+    if max_age_days is None:
+        max_age_days = int(config["defaults"]["last_commit_within_days"])
+    if now_ts is None:
+        now_ts = time.time()
 
     exclude = set()
     for entry in exclude_repos or []:
-        exclude.add(entry.strip().lower())
-        exclude.add(entry.strip().lower().rstrip("/").replace("https://github.com/", ""))
+        normalized = entry.strip().lower()
+        exclude.add(normalized)
+        exclude.add(normalized.rstrip("/").replace("https://github.com/", ""))
 
     kept: List[Dict[str, Any]] = []
     discarded: List[Dict[str, str]] = []
-
     for repo in items:
-        full_name = repo.get("full_name", "")
-        reason: Optional[str] = None
-
-        if repo.get("stargazers_count", 0) < floor:
-            reason = f"stars<{floor}"
-        elif repo.get("archived") is True:
-            reason = "archived"
-        elif repo.get("disabled", False) is True:
-            reason = "disabled"
-        elif full_name.lower() in exclude or (repo.get("html_url") or "").lower() in exclude:
-            reason = "excluded"
-        else:
-            pushed_at = repo.get("pushed_at")
-            if pushed_at and max_age_days:
-                try:
-                    pushed_dt = datetime.strptime(
-                        pushed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                    now = datetime.fromtimestamp(now_ts or time.time(), tz=timezone.utc)
-                    if (now - pushed_dt).days > max_age_days:
-                        reason = f"last_commit>{max_age_days}d"
-                except ValueError:
-                    pass
-
+        reason = _discard_reason(repo, floor, exclude, max_age_days, now_ts)
         if reason:
-            discarded.append({"repository": full_name, "reason": reason})
+            discarded.append({"repository": repo.get("full_name", ""), "reason": reason})
         else:
             kept.append(repo)
-
     return kept, discarded
 
 
 def deduplicate(repos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen: Dict[str, Dict[str, Any]] = {}
+    best: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
     for repo in repos:
         name = repo.get("full_name", "")
-        if name not in seen:
-            seen[name] = repo
+        if name not in best:
+            best[name] = repo
             order.append(name)
-        else:
-            existing = seen[name]
-            if repo.get("stargazers_count", 0) > existing.get("stargazers_count", 0):
-                seen[name] = repo
-    return [seen[n] for n in order]
+        elif repo.get("stargazers_count", 0) > best[name].get("stargazers_count", 0):
+            best[name] = repo
+    return [best[name] for name in order]
 
 
 def sort_initial(repos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return sorted(
-        repos,
-        key=lambda r: (r.get("stargazers_count", 0), r.get("pushed_at") or ""),
-        reverse=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 候選專案資料抓取（深度分析用）
-# ---------------------------------------------------------------------------
-
-RAW_BASE = "https://raw.githubusercontent.com"
+    return sorted(repos, key=lambda r: (r.get("stargazers_count", 0),
+                                        r.get("pushed_at") or ""), reverse=True)
 
 
 def fetch_file_tree(full_name: str, default_branch: str, token: str
                     ) -> Tuple[List[str], bool, Optional[Dict[str, str]]]:
-    """回傳 (檔案路徑清單, 是否被截斷, error)。"""
     url = f"https://api.github.com/repos/{full_name}/git/trees/{default_branch}"
     result = http_get_json(url, token=token, params={"recursive": "1"})
     if result.error:
         return [], False, result.error
-    tree = result.data.get("tree", []) if isinstance(result.data, dict) else []
-    paths = [entry.get("path", "") for entry in tree if entry.get("type") == "blob"]
-    truncated = bool(result.data.get("truncated", False)) if isinstance(result.data, dict) else False
-    return paths, truncated, None
-
-
-README_NAMES = {"readme", "readme.md", "readme.txt", "readme.rst"}
+    data = result.data if isinstance(result.data, dict) else {}
+    paths = [entry.get("path", "") for entry in data.get("tree", [])
+             if entry.get("type") == "blob"]
+    return paths, bool(data.get("truncated", False)), None
 
 
 def find_readme_path(paths: List[str]) -> Optional[str]:
     for path in paths:
-        parts = path.split("/")
-        if len(parts) == 1 and parts[0].lower() in README_NAMES:
+        if "/" not in path and path.lower() in README_NAMES:
             return path
     return None
 
 
-def fetch_readme(full_name: str, default_branch: str, token: str) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
-    url = f"{RAW_BASE}/{full_name}/{default_branch}/README.md"
-    text, err = http_get_text(url, token=token)
-    if text is None and err is None:
-        # 嘗試其他常見名稱
-        for name in ("README.rst", "README.txt"):
-            text, err = http_get_text(f"{RAW_BASE}/{full_name}/{default_branch}/{name}", token=token)
-            if text is not None:
-                break
-    return text, err
-
-
 def fetch_raw_file(full_name: str, default_branch: str, path: str, token: str
                    ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
-    url = f"{RAW_BASE}/{full_name}/{default_branch}/{path}"
-    return http_get_text(url, token=token)
+    return http_get_text(f"{RAW_BASE}/{full_name}/{default_branch}/{path}", token=token)
 
 
-def fetch_has_release(full_name: str, token: str) -> Tuple[bool, Optional[Dict[str, str]]]:
+def fetch_has_release(full_name: str, token: str
+                      ) -> Tuple[bool, Optional[Dict[str, str]]]:
     url = f"https://api.github.com/repos/{full_name}/releases"
     result = http_get_json(url, token=token, params={"per_page": 1})
     if result.error:
         return False, result.error
-    releases = result.data if isinstance(result.data, list) else []
-    return len(releases) > 0, None
+    return bool(result.data if isinstance(result.data, list) else []), None

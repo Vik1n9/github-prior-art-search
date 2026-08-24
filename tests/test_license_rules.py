@@ -1,8 +1,7 @@
-# -*- coding: utf-8 -*-
-"""§11 授權規則驗收：分類、分數、動作、無授權 → high_risk。"""
 import pytest
 
-from parse_license import analyze_license, classify_license, license_action, license_fit_score
+from scripts.parse_license import (analyze_license, classify_license,
+                                   license_action, license_fit_score)
 
 
 class TestClassification:
@@ -17,7 +16,7 @@ class TestClassification:
         ("SSPL-1.0", "high_risk"),
         (None, "unknown"),
         ("NOASSERTION", "unknown"),
-        ("Other/Custom", "review_required"),  # 清單外 SPDX 保守處理
+        ("Other/Custom", "review_required"),
     ])
     def test_categories(self, config, spdx, expected):
         assert classify_license(spdx, config) == expected
@@ -54,7 +53,6 @@ class TestAnalyzeLicense:
         assert info["action"] == "reference_only"
 
     def test_license_file_but_unparsed_stays_unknown(self, config):
-        """存在授權檔但 API 未識別：不得由腳本或模型猜測內容（§15）。"""
         info = analyze_license(self._metadata(None), ["LICENSE"], config)
         assert info["source"] == "license_file_unparsed"
         assert info["category"] == "unknown"

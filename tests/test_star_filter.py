@@ -1,12 +1,9 @@
-# -*- coding: utf-8 -*-
-"""§22.1 驗收：星數 <100、archived、disabled 專案不得進入候選；黑名單與去重。"""
 import time
-
-import pytest
 from conftest import repo
 
-from search_github import (deduplicate, effective_min_stars, ensure_star_filter,
-                           filter_repositories, sort_initial)
+from scripts.search_github import (deduplicate, effective_max_age_days,
+                                   effective_min_stars, ensure_star_filter,
+                                   filter_repositories, sort_initial)
 
 
 class TestEffectiveMinStars:
@@ -70,3 +67,23 @@ class TestStarFilterQuery:
     def test_existing_star_filter_preserved(self):
         q = ensure_star_filter("dashboard stars:>=250", 100)
         assert q == "dashboard stars:>=250"
+
+
+class TestEffectiveMaxAgeDays:
+    def test_input_value_overrides_config_default(self):
+        assert effective_max_age_days({"last_commit_within_days": 365}) == 365
+
+    def test_falls_back_to_config_default(self, config):
+        assert effective_max_age_days({}) == \
+            config["defaults"]["last_commit_within_days"]
+
+    def test_filter_honours_caller_supplied_age(self):
+        now = time.time()
+        recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 400 * 86400))
+        kept, discarded = filter_repositories([repo("a/b", pushed_at=recent)], [],
+                                              max_age_days=365, now_ts=now)
+        assert kept == []
+        assert discarded[0]["reason"] == "last_commit>365d"
+        kept, _ = filter_repositories([repo("a/b", pushed_at=recent)], [],
+                                      max_age_days=730, now_ts=now)
+        assert [r["full_name"] for r in kept] == ["a/b"]

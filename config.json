@@ -1,52 +1,17 @@
 {
-  "hard_rules": {
-    "ignore_stars_below_100": {
-      "enabled": true,
-      "field": "stargazers_count",
-      "threshold": 100,
-      "action": "discard"
-    },
-    "ignore_archived": {
-      "enabled": true,
-      "value": true,
-      "action": "discard"
-    },
-    "ignore_disabled": {
-      "enabled": true,
-      "value": true,
-      "action": "discard"
-    },
-    "ignore_no_license_for_direct_reuse": {
-      "enabled": true,
-      "action": "downgrade_to_reference_only",
-      "risk_level": "high"
-    },
-    "copyleft_manual_review": {
-      "enabled": true
-    },
-    "model_cannot_override_script_decision": {
-      "enabled": true
-    }
-  },
   "search": {
     "endpoint": "https://api.github.com/search/repositories",
     "per_page": 50,
     "sort": "updated",
     "order": "desc",
     "max_queries": 10,
-    "request_delay_seconds": 2.5,
     "rate_limit_max_wait_seconds": 130
   },
   "defaults": {
     "min_stars": 100,
     "enforced_min_stars": 100,
     "max_candidates": 8,
-    "last_commit_within_days": 730,
-    "license_preference": [
-      "MIT",
-      "Apache-2.0",
-      "BSD-3-Clause"
-    ]
+    "last_commit_within_days": 730
   },
   "license_policy": {
     "preferred": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause"],
@@ -83,12 +48,6 @@
     },
     "no_lockfile": {
       "level": "medium"
-    },
-    "outdated_major_versions": {
-      "enabled": false
-    },
-    "known_vulnerabilities": {
-      "enabled": false
     }
   },
   "scoring_weights": {
@@ -167,7 +126,6 @@
       "relevance": 60
     }
   },
-  "cache_dir_default": ".cache/github-prior-art-search",
   "output_dir_default": "output/github-prior-art-search",
   "dependency_manifests": {
     "npm": {

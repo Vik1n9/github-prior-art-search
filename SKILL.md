@@ -8,11 +8,11 @@ description: >-
   當使用者提到「先行調研」「prior art」「有沒有現成的專案」「不要重造輪子」
   「找類似的開源方案」「評估能不能直接用某 repo」時，務必使用此技能。
 compatibility: >-
-  Requires bash, Python 3.9+ (standard library only, no pip packages),
+  Requires Python 3.9+ (standard library only, no pip packages),
   network access to api.github.com, and the GITHUB_TOKEN environment variable.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   execution_mode: script_first
 ---
 
@@ -27,24 +27,7 @@ metadata:
 
 ## 執行流程
 
-### 步驟 1：檢查技能依賴
-
-```bash
-bash scripts/check_dependencies.sh
-```
-
-本技能僅使用 Python 標準庫（無需 pip 安裝任何套件）；若回報缺少
-Python 3.9+ 或 bash，安裝後重新檢查。缺少依賴時**不得**繼續執行。
-
-### 步驟 2：（必要）確認 GITHUB_TOKEN
-
-```bash
-[ -n "$GITHUB_TOKEN" ] && echo OK || echo MISSING
-```
-
-缺失時停止並請使用者設定，不得猜測或代填。
-
-### 步驟 3：準備輸入 JSON
+### 步驟 1：準備輸入 JSON
 
 向使用者收集必要欄位後寫入暫存檔：
 
@@ -55,7 +38,6 @@ Python 3.9+ 或 bash，安裝後重新檢查。缺少依賴時**不得**繼續�
   "tech_stack": ["TypeScript", "Node.js"],
   "domain": "game_ops",
   "architecture_style": [],
-  "license_preference": ["MIT", "Apache-2.0", "BSD-3-Clause"],
   "exclude_repos": [],
   "max_candidates": 8,
   "min_stars": 100,
@@ -69,13 +51,16 @@ Python 3.9+ 或 bash，安裝後重新檢查。缺少依賴時**不得**繼續�
 - 你可以（也建議）將使用者描述中的關鍵概念轉為**英文關鍵字**填入
   `extra_keywords`，提升查詢命中率——這是你唯一允許參與的搜尋環節。
 
-### 步驟 4：執行腳本
+### 步驟 2：執行腳本
 
 ```bash
 python3 main.py --input /tmp/prior_art_input.json --output-dir output/github-prior-art-search
 ```
 
-### 步驟 5：讀取結構化結果並產生受限摘要
+腳本會自行驗證 Python 版本與 `GITHUB_TOKEN`；任一缺失時以非零結束並印出原因，
+**不得繞過**。缺少 `GITHUB_TOKEN` 時請使用者自行設定，不得猜測或代填。
+
+### 步驟 3：讀取結構化結果並產生受限摘要
 
 讀取 `output/github-prior-art-search/result.json`，然後**僅**產生以下 schema 的
 摘要內容（附加於報告末尾的「模型摘要」區塊）：
@@ -99,16 +84,13 @@ python3 main.py --input /tmp/prior_art_input.json --output-dir output/github-pri
 
 | 檔案 | 內容 |
 |---|---|
-| `result.json` | 完整結果（狀態、查詢、候選、建議、警告） |
-| `result.md` | 人類可讀報告（模板渲染） |
-| `candidates.json` | 候選清單 |
-| `dependencies.json` | 各候選依賴解析結果 |
-| `decision.json` | 主要建議與各候選決策 |
+| `result.json` | 完整結果（狀態、查詢、候選、依賴、評分、建議、警告） |
+| `result.md` | 人類可讀報告 |
 
 ## 異常處理
 
 - `status=partial`：部分查詢或解析失敗，詳見 `warnings`，照實告知使用者。
 - 無候選 → 建議 `build_in_house`。
-- 缺少 GITHUB_TOKEN 或依賴 → 腳本以非零結束並回報原因，不得繞過。
+- 缺少 `GITHUB_TOKEN` 或 Python 版本過低 → 腳本以非零結束並回報原因。
 
 詳細規則（評分訊號、決策優先序、reusability 定義）見 [references/RULES.md](references/RULES.md)。

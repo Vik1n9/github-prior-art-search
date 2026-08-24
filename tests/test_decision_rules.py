@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
-"""§14 決策規則驗收：門檻邊界、優先序、avoid 蓋過 adopt、build_in_house。"""
-from build_recommendation import build_recommendation, decide_reuse
-from score_candidates import calculate_scores, compute_risks
+from scripts.build_recommendation import build_recommendation, decide_reuse
+from scripts.score_candidates import calculate_scores, compute_risks
 
 
 def scores(total=90, relevance=90, license_fit=100, maintenance=90):
@@ -22,7 +20,6 @@ class TestDecideReuse:
     def test_adopt_blocked_by_high_dep_risk(self, config):
         risks = [{"type": "dependency_risk", "level": "high", "detail": ""}]
         result = decide_reuse(scores(), risks, {}, config)
-        # dep_risk=high 擋掉 adopt，落入下一順位
         assert result == "fork_and_modify"
 
     def test_fork_when_below_adopt_relevance(self, config):
@@ -120,11 +117,11 @@ class TestFullScorePipeline:
                               "package.json", "examples/demo.ts"],
                              has_release=True, now_ts=1787500000.0, config=config)
         assert 0 <= s["total"] <= 100
-        # 名稱、描述、功能、技術棧皆高度命中
         assert s["relevance"] >= 70
         assert s["maintenance_activity"] == 100
 
-        risks = compute_risks(license_info, [], repo_meta, config)
+        risks = compute_risks(license_info, [], repo_meta,
+                              config["defaults"]["last_commit_within_days"])
         assert risks == []
         decision = decide_reuse(s, risks, repo_meta, config)
         assert decision in ("adopt_as_dependency", "fork_and_modify",

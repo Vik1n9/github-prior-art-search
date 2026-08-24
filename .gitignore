@@ -1,7 +1,6 @@
 *.py[cod]
 .DS_Store
 ._*
-.cache/
 .pytest_cache/
 .venv/
 __pycache__/

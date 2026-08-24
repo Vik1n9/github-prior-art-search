@@ -1,13 +1,23 @@
 {
   "project_goal": "遊戲活動配置後台",
-  "core_features": ["活動配置", "任務配置", "獎勵發放", "審核流程"],
-  "tech_stack": ["TypeScript", "Node.js"],
+  "core_features": [
+    "活動配置",
+    "任務配置",
+    "獎勵發放",
+    "審核流程"
+  ],
+  "tech_stack": [
+    "TypeScript",
+    "Node.js"
+  ],
   "domain": "game_ops",
   "architecture_style": [],
-  "license_preference": ["MIT", "Apache-2.0", "BSD-3-Clause"],
   "exclude_repos": [],
   "max_candidates": 8,
   "min_stars": 100,
   "last_commit_within_days": 730,
-  "extra_keywords": ["game ops admin dashboard", "activity configuration management"]
+  "extra_keywords": [
+    "game ops admin dashboard",
+    "activity configuration management"
+  ]
 }
