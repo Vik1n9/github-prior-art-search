@@ -100,7 +100,7 @@ avoid_due_to_risk > adopt_as_dependency > fork_and_modify
 | status | 觸發條件 |
 |---|---|
 | completed | 全部查詢與分析成功 |
-| partial | 任一查詢 rate limit／失敗、檔案樹抓取失敗、release 查詢失敗、依賴解析失敗 |
+| partial | 任一查詢 rate limit／失敗、檔案樹抓取失敗、release 查詢失敗、依賴解析失敗、未提供 extra_keywords |
 | failed（exit 1） | 缺 GITHUB_TOKEN、Python 版本過低、輸入不合法等致命錯誤 |
 
 檔案樹被截斷會記入 warnings（`tree_truncated`）但不改變 status。
@@ -114,3 +114,19 @@ Search API 認證後上限 30 req/min，單次執行查詢數上限 10，遠低�
 
 本技能不做磁碟快取：候選是否「最近仍在維護」是核心過濾條件，快取會讓重跑拿到
 過期資料，而單輪執行的請求量本來就遠低於額度。
+
+## 7. 查詢來源
+
+查詢完全來自輸入的 `extra_keywords`，不由腳本從欄位排列組合產生。
+
+早期版本用模板（`{domain} admin dashboard`、`{feature} management system` 等）
+把輸入欄位排列成查詢，有兩個無法修補的問題：
+
+1. **模板把專案形態寫死。** 對非後台類專案會產生 `document processing admin
+   dashboard` 這種無意義查詢，吃掉本就有限的查詢配額。
+2. **模板無法翻譯。** 字串排列只能重組原始輸入，把「滑動視窗限流」原樣送進
+   GitHub——而 GitHub 語料以英文為主，命中率極低。只有模型能做這層轉換。
+
+因此查詢措辭交給模型，腳本專注於它真正確定性的部分：過濾、評分與決策。未提供
+`extra_keywords` 時退回以 `project_goal` 原文查詢一次，並記 `no_extra_keywords`
+警告、將 status 標為 `partial`——不假裝這是一次完整的調研。

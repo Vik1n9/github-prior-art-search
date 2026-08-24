@@ -15,7 +15,8 @@ from scripts.render_report import write_outputs
 
 MINIMUM_PYTHON = (3, 9)
 PARTIAL_WARNING_TYPES = ("rate_limit", "search_failed", "tree_fetch_failed",
-                         "release_check_failed", "dependency_parsing_failed")
+                         "release_check_failed", "dependency_parsing_failed",
+                         "no_extra_keywords")
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
@@ -35,13 +36,14 @@ def load_input(path: str) -> Dict[str, Any]:
         raise ScriptFailure(f"輸入檔案不是合法 JSON：{exc}", "invalid_input")
 
 
-def build_search_queries(input_data: Dict[str, Any]) -> List[str]:
-    queries = gh.build_queries(input_data)
+def build_search_queries(input_data: Dict[str, Any]
+                         ) -> Tuple[List[str], List[Dict[str, str]]]:
+    queries, warnings = gh.build_queries(input_data)
     if not queries:
         raise ScriptFailure(
-            "無法產生任何搜尋查詢，請提供更具體的 project_goal/core_features。",
+            "無法產生任何搜尋查詢，請提供 extra_keywords 或更具體的 project_goal。",
             "no_queries")
-    return queries
+    return queries, warnings
 
 
 def execute_searches(queries: List[str], token: str, min_stars: int
@@ -94,8 +96,9 @@ def run(input_data: Dict[str, Any], token: str, config: Dict[str, Any],
                          or config["defaults"]["max_candidates"])
     now_ts = time.time()
 
-    queries = build_search_queries(input_data)
-    raw_items, warnings = execute_searches(queries, token, min_stars)
+    queries, warnings = build_search_queries(input_data)
+    raw_items, search_warnings = execute_searches(queries, token, min_stars)
+    warnings.extend(search_warnings)
     shortlist, discarded = shortlist_candidates(raw_items, input_data, max_age_days,
                                                 now_ts, max_candidates)
     candidates, analysis_warnings = analyze_all(shortlist, input_data, token,

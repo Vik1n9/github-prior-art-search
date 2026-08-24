@@ -58,8 +58,10 @@ python3 main.py --input input.example.json --output-dir output/github-prior-art-
 The script validates the Python version and `GITHUB_TOKEN` itself and exits
 non-zero with the reason if either is missing.
 
-Input requires `project_goal` and `core_features`; optional fields include
-`tech_stack`, `domain`, `architecture_style`, `exclude_repos`, `extra_keywords`,
+Input requires `project_goal` and `core_features`. `extra_keywords` supplies the
+actual search queries and should hold 3-8 English technical terms; without it the
+run degrades to a single raw `project_goal` query and reports `partial`. Other
+optional fields: `tech_stack`, `domain`, `architecture_style`, `exclude_repos`,
 `max_candidates`, `last_commit_within_days`, and `min_stars` (a value below 100
 is forced back up to 100).
 
@@ -76,8 +78,11 @@ partial failures set `status = "partial"` with details in `warnings`.
 ## How it works
 
 1. Validate input and enforce hard rules (star floor ≥ 100).
-2. Build search queries from templates (`templates/queries.json`), expanding
-   goal/domain/features/tech-stack placeholders with Cartesian products.
+2. Take the search queries from `extra_keywords` — English technical terms the
+   calling model derives from the project description. Only a model can turn
+   "滑動視窗限流" into `sliding window rate limit`, so query wording is its job;
+   the script never invents queries. Without them it falls back to the raw
+   `project_goal` once and marks the run `partial`.
 3. Query the GitHub Search API (rate-limit aware, stops early once exhausted).
 4. Re-filter locally: stars, archived/disabled, blacklist, last commit age.
 5. Deep-analyze top N candidates: file tree, README, license detection,
@@ -103,8 +108,6 @@ All tests run offline against mocked GitHub responses.
 ├── SKILL.md              # Agent Skills standard definition
 ├── main.py               # Entry point and pipeline orchestration
 ├── config.json           # Weights, license policy, dependency risk, decision gates
-├── templates/
-│   └── queries.json      # Query templates
 ├── scripts/
 │   ├── common.py               # Config, HTTP client (urllib), text matching
 │   ├── search_github.py        # Input validation, query building, search & filtering

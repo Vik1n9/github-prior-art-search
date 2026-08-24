@@ -1,12 +1,9 @@
-import itertools
-import json
 import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .common import ScriptFailure, http_get_json, http_get_text, load_config, tokenize
+from .common import ScriptFailure, http_get_json, http_get_text, load_config
 
 REQUIRED_INPUTS = ("project_goal", "core_features")
 LIST_INPUTS = ("tech_stack", "architecture_style", "exclude_repos", "extra_keywords")
@@ -14,7 +11,12 @@ INT_INPUTS = ("max_candidates", "min_stars", "last_commit_within_days")
 
 RAW_BASE = "https://raw.githubusercontent.com"
 README_NAMES = {"readme", "readme.md", "readme.txt", "readme.rst"}
-QUERIES_PATH = Path(__file__).resolve().parent.parent / "templates" / "queries.json"
+NO_KEYWORDS_WARNING = {
+    "type": "no_extra_keywords",
+    "detail": "輸入未提供 extra_keywords，僅以 project_goal 原文查詢。"
+              "GitHub 語料以英文為主，非英文的 project_goal 命中率極低，"
+              "請補上英文關鍵字以取得有意義的結果。",
+}
 
 
 def validate_input(data: Any) -> Dict[str, Any]:
@@ -64,72 +66,26 @@ def _normalize(query: str) -> str:
     return re.sub(r"\s+", " ", query).strip()
 
 
-def _first_words(text: str, count: int) -> str:
-    return " ".join(tokenize(text)[:count])
-
-
-def _placeholder_values(name: str, spec: Dict[str, Any],
-                        inputs: Dict[str, Any]) -> List[str]:
-    if name == "goal_first_words":
-        return [_first_words(inputs["goal"], 3)]
-    if name == "domain":
-        return [inputs["domain"]]
-    if name == "feature":
-        limit = int(spec.get("feature_limit", 1))
-        return [_first_words(f, 2) for f in inputs["features"][:limit]]
-    if name == "tech_stack":
-        limit = int(spec.get("stack_limit", 1))
-        return inputs["stacks"][:limit]
-    return []
-
-
-def _expand_template(template: str, spec: Dict[str, Any],
-                     inputs: Dict[str, Any]) -> List[str]:
-    names = re.findall(r"\{(\w+)\}", template)
-    choices: List[List[str]] = []
-    for name in names:
-        values = [v for v in _placeholder_values(name, spec, inputs) if v]
-        if not values:
-            return []
-        choices.append(values)
-
-    expanded: List[str] = []
-    for combination in itertools.product(*choices):
-        query = template
-        for name, value in zip(names, combination):
-            query = query.replace("{" + name + "}", value)
-        expanded.append(_normalize(query))
-    return [q for q in expanded if q]
-
-
-def build_queries(input_data: Dict[str, Any]) -> List[str]:
-    inputs = {
-        "goal": (input_data.get("project_goal") or "").strip(),
-        "features": [f for f in input_data.get("core_features", []) if f],
-        "domain": (input_data.get("domain") or "").strip().replace("_", " "),
-        "stacks": [s for s in (input_data.get("tech_stack") or []) if s],
-    }
-    templates = json.loads(QUERIES_PATH.read_text(encoding="utf-8"))["templates"]
-
+def build_queries(input_data: Dict[str, Any]
+                  ) -> Tuple[List[str], List[Dict[str, str]]]:
     queries: List[str] = []
     seen: set = set()
 
     def add(query: str) -> None:
-        query = _normalize(query)
+        query = _normalize(str(query))
         if query and query.lower() not in seen:
             seen.add(query.lower())
             queries.append(query)
 
     for keyword in input_data.get("extra_keywords") or []:
-        add(str(keyword))
+        add(keyword)
 
-    for item in templates:
-        spec = item if isinstance(item, dict) else {}
-        template = item["template"] if isinstance(item, dict) else str(item)
-        for expanded in _expand_template(template, spec, inputs):
-            add(expanded)
+    warnings: List[Dict[str, str]] = []
+    if not queries:
+        add(input_data.get("project_goal") or "")
+        warnings.append(dict(NO_KEYWORDS_WARNING))
 
-    return queries[:int(load_config()["search"]["max_queries"])]
+    return queries[:int(load_config()["search"]["max_queries"])], warnings
 
 
 def ensure_star_filter(query: str, min_stars: int) -> str:

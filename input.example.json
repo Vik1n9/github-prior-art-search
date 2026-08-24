@@ -17,6 +17,10 @@
   "last_commit_within_days": 730,
   "extra_keywords": [
     "rate limiter middleware",
-    "sliding window rate limit redis"
+    "sliding window rate limit",
+    "distributed rate limiting redis",
+    "topic:rate-limiting",
+    "golang throttling library",
+    "multi tenant quota"
   ]
 }

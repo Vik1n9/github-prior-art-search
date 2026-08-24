@@ -1,125 +1,85 @@
-import json
-from pathlib import Path
-
 from scripts.search_github import build_queries
 
 FULL_INPUT = {
-    "project_goal": "API 速率限制中介層 rate limiter",
-    "core_features": ["滑動視窗限流", "多租戶配額", "Redis 儲存"],
+    "project_goal": "API 速率限制中介層",
+    "core_features": ["滑動視窗限流", "多租戶配額"],
     "tech_stack": ["Go", "Redis"],
     "domain": "rate_limiting",
-    "extra_keywords": ["rate limiter middleware", "sliding window redis quota"],
+    "extra_keywords": ["rate limiter middleware", "sliding window rate limit",
+                       "topic:rate-limiting"],
 }
 
 
-class TestTemplateExpansion:
-    def test_goal_first_words(self):
-        queries = build_queries({
-            "project_goal": "api rate limiter middleware",
-            "core_features": [],
-        })
-        assert "api rate limiter" in queries
+class TestKeywordDrivenQueries:
+    def test_queries_are_the_extra_keywords(self):
+        queries, warnings = build_queries(FULL_INPUT)
+        assert queries == FULL_INPUT["extra_keywords"]
+        assert warnings == []
 
-    def test_domain_templates(self):
-        queries = build_queries({
-            "project_goal": "x",
-            "core_features": ["quota tracking"],
-            "domain": "rate_limiting",
-        })
-        assert "topic:rate limiting" in queries
-        assert "rate limiting quota tracking" in queries
+    def test_order_is_preserved(self):
+        queries, _ = build_queries(FULL_INPUT)
+        assert queries[0] == "rate limiter middleware"
 
-    def test_feature_limit(self):
-        queries = build_queries({
-            "project_goal": "x",
-            "core_features": ["alpha beta", "gamma delta", "epsilon zeta", "eta theta"],
-        })
-        assert "alpha beta" in queries
-        assert "gamma delta" in queries
-        assert "epsilon zeta" in queries
-        assert "eta theta" not in queries
-
-    def test_domain_feature_limit(self):
-        queries = build_queries({
-            "project_goal": "x",
-            "core_features": ["alpha beta", "gamma delta", "epsilon zeta"],
-            "domain": "infra",
-        })
-        assert "infra alpha beta" in queries
-        assert "infra gamma delta" in queries
-        assert "infra epsilon zeta" not in queries
-
-    def test_stack_feature_cross_product(self):
-        queries = build_queries({
-            "project_goal": "x",
-            "core_features": ["alpha beta"],
-            "tech_stack": ["Go", "Rust", "Python"],
-        })
-        assert "Go alpha beta" in queries
-        assert "Rust alpha beta" in queries
-        assert "Python alpha beta" not in queries
-
-    def test_stack_domain_uses_first_stack(self):
-        queries = build_queries({
+    def test_duplicates_removed_case_insensitively(self):
+        queries, _ = build_queries({
             "project_goal": "x",
             "core_features": ["y"],
-            "tech_stack": ["Go", "Rust"],
-            "domain": "rate_limiting",
+            "extra_keywords": ["Rate Limiter", "rate limiter", "  rate   limiter  "],
         })
-        assert "Go rate limiting" in queries
-        assert "Rust rate limiting" not in queries
+        assert queries == ["Rate Limiter"]
 
-    def test_missing_placeholder_skips_template(self):
-        queries = build_queries({
+    def test_whitespace_normalized(self):
+        queries, _ = build_queries({
             "project_goal": "x",
             "core_features": ["y"],
+            "extra_keywords": ["  sliding   window\trate  limit "],
         })
-        assert not any("topic:" in q for q in queries)
+        assert queries == ["sliding window rate limit"]
 
-    def test_no_duplicates(self):
-        queries = build_queries(FULL_INPUT)
-        lowered = [q.lower() for q in queries]
-        assert len(lowered) == len(set(lowered))
+    def test_blank_keywords_dropped(self):
+        queries, _ = build_queries({
+            "project_goal": "fallback goal",
+            "core_features": ["y"],
+            "extra_keywords": ["", "   ", "real keyword"],
+        })
+        assert queries == ["real keyword"]
 
     def test_capped_by_max_queries(self):
-        assert len(build_queries(FULL_INPUT)) <= 10
-
-
-class TestExtraKeywordPriority:
-    def test_extra_keywords_come_first(self):
-        queries = build_queries(FULL_INPUT)
-        assert queries[:2] == FULL_INPUT["extra_keywords"]
-
-    def test_extra_keywords_survive_the_cap(self):
-        crowded = dict(FULL_INPUT,
-                       core_features=[f"feature {n}" for n in range(12)],
-                       tech_stack=["Go", "Rust", "Python"])
-        queries = build_queries(crowded)
-        assert len(queries) == 10
-        for keyword in crowded["extra_keywords"]:
-            assert keyword in queries
-
-
-class TestTemplatesStayDomainNeutral:
-    BIASED_TERMS = ("admin dashboard", "management system", "engine",
-                    "backend", "cms", "portal")
-
-    def test_no_hardcoded_project_shape(self):
-        path = Path(__file__).resolve().parent.parent / "templates" / "queries.json"
-        templates = json.loads(path.read_text(encoding="utf-8"))["templates"]
-        for item in templates:
-            text = item["template"].lower()
-            literal = text.replace("{goal_first_words}", "").replace("{domain}", "")
-            literal = literal.replace("{feature}", "").replace("{tech_stack}", "")
-            for term in self.BIASED_TERMS:
-                assert term not in literal, f"模板 {item['template']} 寫死了領域字眼"
-
-    def test_unrelated_project_gets_clean_queries(self):
-        queries = build_queries({
-            "project_goal": "PDF parsing library",
-            "core_features": ["text extraction", "table detection"],
-            "tech_stack": ["Rust"],
-            "domain": "document_processing",
+        queries, _ = build_queries({
+            "project_goal": "x",
+            "core_features": ["y"],
+            "extra_keywords": [f"keyword {n}" for n in range(25)],
         })
-        for term in self.BIASED_TERMS:
-            assert not any(term in q.lower() for q in queries)
+        assert len(queries) == 10
+
+
+class TestProjectGoalFallback:
+    def test_falls_back_to_project_goal(self):
+        queries, warnings = build_queries({
+            "project_goal": "API 速率限制中介層",
+            "core_features": ["滑動視窗限流"],
+        })
+        assert queries == ["API 速率限制中介層"]
+        assert [w["type"] for w in warnings] == ["no_extra_keywords"]
+
+    def test_fallback_not_used_when_keywords_present(self):
+        queries, warnings = build_queries({
+            "project_goal": "API 速率限制中介層",
+            "core_features": ["滑動視窗限流"],
+            "extra_keywords": ["rate limiter middleware"],
+        })
+        assert "API 速率限制中介層" not in queries
+        assert warnings == []
+
+    def test_degraded_run_is_reported_as_partial(self):
+        from main import PARTIAL_WARNING_TYPES
+        assert "no_extra_keywords" in PARTIAL_WARNING_TYPES
+
+    def test_empty_keywords_list_triggers_fallback(self):
+        queries, warnings = build_queries({
+            "project_goal": "rate limiter",
+            "core_features": ["y"],
+            "extra_keywords": [],
+        })
+        assert queries == ["rate limiter"]
+        assert warnings

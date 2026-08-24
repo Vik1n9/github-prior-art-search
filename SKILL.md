@@ -12,7 +12,7 @@ compatibility: >-
   network access to api.github.com, and the GITHUB_TOKEN environment variable.
 license: MIT
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   execution_mode: script_first
 ---
 
@@ -42,14 +42,23 @@ metadata:
   "max_candidates": 8,
   "min_stars": 100,
   "last_commit_within_days": 730,
-  "extra_keywords": []
+  "extra_keywords": [
+    "rate limiter middleware",
+    "sliding window rate limit",
+    "topic:rate-limiting"
+  ]
 }
 ```
 
 - 必填：`project_goal`、`core_features`
 - `min_stars` 即使設低於 100，腳本仍強制使用 100
-- 你可以（也建議）將使用者描述中的關鍵概念轉為**英文關鍵字**填入
-  `extra_keywords`，提升查詢命中率——這是你唯一允許參與的搜尋環節。
+- **`extra_keywords` 是搜尋查詢的唯一來源，請務必填寫。** 把使用者的描述轉成
+  3–8 條**英文**技術關鍵字：GitHub 語料以英文為主，非英文查詢命中率極低，而
+  只有你能把「滑動視窗限流」翻成 `sliding window rate limit`。可善用 GitHub
+  搜尋語法（如 `topic:rate-limiting`，注意 topic 是連字號 slug、不接受空白）。
+  這是你唯一允許參與的搜尋環節——腳本不會替你臆造查詢。
+- 未提供 `extra_keywords` 時，腳本只會以 `project_goal` 原文查詢一次，並記入
+  `no_extra_keywords` 警告、將 `status` 標為 `partial`。
 
 ### 步驟 2：執行腳本
 

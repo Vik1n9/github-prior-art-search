@@ -52,10 +52,11 @@ python3 main.py --input input.example.json --output-dir output/github-prior-art-
 
 腳本會自行檢查 Python 版本與 `GITHUB_TOKEN`，任一缺失即以非零結束並印出原因。
 
-輸入必填 `project_goal` 與 `core_features`；選填欄位包括 `tech_stack`、
-`domain`、`architecture_style`、`exclude_repos`、`extra_keywords`、
-`max_candidates`、`last_commit_within_days`、`min_stars`（低於 100 一律強制
-回升為 100）。
+輸入必填 `project_goal` 與 `core_features`。`extra_keywords` 是實際的搜尋查詢，
+應填 3–8 條英文技術關鍵字；未提供時會退化為單一條 `project_goal` 原文查詢並回報
+`partial`。其餘選填欄位：`tech_stack`、`domain`、`architecture_style`、
+`exclude_repos`、`max_candidates`、`last_commit_within_days`、`min_stars`
+（低於 100 一律強制回升為 100）。
 
 輸出目錄會產生兩個檔案：
 
@@ -70,8 +71,10 @@ python3 main.py --input input.example.json --output-dir output/github-prior-art-
 ## 運作方式
 
 1. 校驗輸入並套用硬性規則（星數門檻 ≥ 100）。
-2. 依模板（`templates/queries.json`）產生查詢，展開目標／領域／功能／技術堆疊
-   佔位符（多值採笛卡兒積）。
+2. 查詢取自 `extra_keywords`——由呼叫端模型從專案描述提煉的英文技術關鍵字。
+   只有模型能把「滑動視窗限流」翻成 `sliding window rate limit`，因此查詢措辭
+   是模型的職責，腳本不臆造查詢。未提供時退回以 `project_goal` 原文查一次，
+   並將該次執行標為 `partial`。
 3. 呼叫 GitHub Search API（處理 rate limit，額度耗盡即提早停止）。
 4. 本地二次過濾：星數、archived/disabled、黑名單、最後提交時間。
 5. 對前 N 名候選深度分析：檔案樹、README、授權辨識、依賴清單與 lockfile、release。
@@ -94,8 +97,6 @@ python3 -m pytest tests/ -v   # pytest 僅為開發／測試依賴
 ├── SKILL.md              # Agent Skills 標準定義
 ├── main.py               # 進入點與流程編排
 ├── config.json           # 權重、授權政策、依賴風險、決策門檻
-├── templates/
-│   └── queries.json      # 查詢模板
 ├── scripts/
 │   ├── common.py               # 設定、HTTP 客戶端（urllib）、文字比對
 │   ├── search_github.py        # 輸入校驗、查詢生成、搜尋與過濾
