@@ -261,8 +261,13 @@ def build_dependency_list(manifests: Dict[str, List[str]],
 
 
 def summarize_dependencies(dependencies: List[Dict[str, Any]], lockfiles: List[str],
-                           manifests: Dict[str, List[str]]) -> Dict[str, Any]:
+                           manifests: Dict[str, List[str]],
+                           status: str = "parsed",
+                           detail_limit: Optional[int] = None) -> Dict[str, Any]:
+    limit = int(load_config()["analysis"]["dependency_detail_limit"]) \
+        if detail_limit is None else detail_limit
     return {
+        "status": status,
         "manifests_found": sorted(manifests.keys()),
         "manifest_files": sorted(f for files in manifests.values() for f in files),
         "lockfiles_found": lockfiles,
@@ -271,63 +276,53 @@ def summarize_dependencies(dependencies: List[Dict[str, Any]], lockfiles: List[s
         "dev_count": sum(1 for d in dependencies if d["type"] == "dev"),
         "total_count": len(dependencies),
         "unpinned_count": sum(1 for d in dependencies if not d["pinned"]),
-        "details": dependencies,
-    }
-
-
-def empty_dependency_summary(lockfiles: Optional[List[str]] = None) -> Dict[str, Any]:
-    lockfiles = lockfiles or []
-    return {
-        "manifests_found": [],
-        "manifest_files": [],
-        "lockfiles_found": lockfiles,
-        "lockfile_present": bool(lockfiles),
-        "runtime_count": 0,
-        "dev_count": 0,
-        "total_count": 0,
-        "unpinned_count": 0,
-        "details": [],
+        "details": dependencies[:limit],
+        "details_truncated": len(dependencies) > limit,
     }
 
 
 def dependency_risks(summary: Dict[str, Any],
                      config: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
-    rules = (config or load_config())["dependency_risk_rules"]
+    if summary.get("status") != "parsed":
+        return []
     risks: List[Dict[str, str]] = []
-
-    total_rule = rules["high_total_dependencies"]
-    if summary["total_count"] > int(total_rule["threshold"]):
-        risks.append({"type": "dependency_risk", "level": total_rule["level"],
-                      "detail": f"依賴總數 {summary['total_count']} "
-                                f"超過門檻 {total_rule['threshold']}。"})
-
-    unpinned_rule = rules["high_unpinned_dependencies"]
-    if summary["unpinned_count"] > int(unpinned_rule["threshold"]):
-        risks.append({"type": "dependency_risk", "level": unpinned_rule["level"],
-                      "detail": f"未固定版本依賴 {summary['unpinned_count']} "
-                                f"筆超過門檻 {unpinned_rule['threshold']}。"})
-
-    if not summary["lockfile_present"] and summary["total_count"] > 0:
-        risks.append({"type": "dependency_risk", "level": rules["no_lockfile"]["level"],
-                      "detail": "未偵測到 lockfile，版本重現性無法保證。"})
-
+    flagged_kinds: set = set()
+    for rule in (config or load_config())["dependency_risk_rules"]:
+        kind = rule["kind"]
+        if kind in flagged_kinds:
+            continue
+        if kind == "total" and summary["total_count"] > int(rule["threshold"]):
+            detail = f"依賴總數 {summary['total_count']} 超過門檻 {rule['threshold']}。"
+        elif kind == "unpinned" and summary["unpinned_count"] > int(rule["threshold"]):
+            detail = (f"未固定版本依賴 {summary['unpinned_count']} 筆"
+                      f"超過門檻 {rule['threshold']}。")
+        elif kind == "no_lockfile" and not summary["lockfile_present"] \
+                and summary["total_count"] > 0:
+            detail = "未偵測到 lockfile，版本重現性無法保證。"
+        else:
+            continue
+        flagged_kinds.add(kind)
+        risks.append({"type": "dependency_risk", "level": rule["level"],
+                      "detail": detail})
     return risks
 
 
-def analyze_dependencies(paths: List[str], fetch_content: Callable[[str], Optional[str]]
-                         ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, str]]]:
+def analyze_dependencies(paths: List[str],
+                         fetch_content: Callable[[str], Tuple[Optional[str],
+                                                              Optional[Dict[str, str]]]]
+                         ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
     warnings: List[Dict[str, str]] = []
     manifests = find_manifests(paths)
     lockfiles = find_lockfiles(paths)
 
     if not manifests:
-        return empty_dependency_summary(lockfiles), warnings
+        return summarize_dependencies([], lockfiles, {}, "no_manifest"), warnings
 
     contents: Dict[str, str] = {}
     failed_files: List[str] = []
     for files in manifests.values():
         for file_name in files:
-            content = fetch_content(file_name)
+            content, _error = fetch_content(file_name)
             if content is None:
                 failed_files.append(file_name)
             else:
@@ -337,12 +332,12 @@ def analyze_dependencies(paths: List[str], fetch_content: Callable[[str], Option
         warnings.append({"type": PARSE_FAILED,
                          "detail": f"無法取得依賴清單內容：{', '.join(failed_files)}"})
         if not contents:
-            return None, warnings
+            return summarize_dependencies([], lockfiles, manifests, "failed"), warnings
 
     try:
         dependencies = build_dependency_list(manifests, contents)
     except ValueError as exc:
         warnings.append({"type": PARSE_FAILED, "detail": str(exc)})
-        return None, warnings
+        return summarize_dependencies([], lockfiles, manifests, "failed"), warnings
 
     return summarize_dependencies(dependencies, lockfiles, manifests), warnings

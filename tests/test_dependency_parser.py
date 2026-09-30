@@ -70,8 +70,9 @@ class TestParsers:
 
 
 class TestSummaryAndRisks:
-    def _summary(self, total, unpinned, lockfile=True):
+    def _summary(self, total, unpinned, lockfile=True, status="parsed"):
         return {
+            "status": status,
             "manifests_found": ["npm"],
             "lockfiles_found": ["package-lock.json"] if lockfile else [],
             "lockfile_present": lockfile, "runtime_count": total, "dev_count": 0,
@@ -92,6 +93,14 @@ class TestSummaryAndRisks:
         assert any("超過門檻 200" in r["detail"] for r in rules)
         assert dependency_risks(self._summary(200, 0), config) == []
 
+    def test_threshold_500_total_is_high_and_not_double_counted(self, config):
+        rules = dependency_risks(self._summary(501, 0), config)
+        assert [r["level"] for r in rules] == ["high"]
+
+    def test_unparsed_summary_carries_no_computed_risk(self, config):
+        assert dependency_risks(self._summary(0, 0, lockfile=False,
+                                              status="failed"), config) == []
+
     def test_threshold_20_unpinned(self, config):
         rules = dependency_risks(self._summary(50, 21), config)
         assert any("未固定" in r["detail"] for r in rules)
@@ -102,10 +111,33 @@ class TestSummaryAndRisks:
         assert {"type": "dependency_risk", "level": "medium"} in \
             [{k: v for k, v in r.items() if k != "detail"} for r in rules]
 
-    def test_no_manifests_returns_empty_summary_with_warning_free(self, config):
-        summary, warnings = analyze_dependencies([], lambda p: None)
-        assert summary["total_count"] == 0
+    def test_no_manifest_is_reported_as_such(self, config):
+        summary, warnings = analyze_dependencies([], lambda p: (None, None))
+        assert summary["status"] == "no_manifest"
         assert warnings == []
+
+    def test_unfetchable_manifest_is_failed_not_zero(self, config):
+        summary, warnings = analyze_dependencies(["go.mod"], lambda p: (None, None))
+        assert summary["status"] == "failed"
+        assert warnings[0]["type"] == "dependency_parsing_failed"
+
+    def test_unparsable_manifest_is_failed(self, config):
+        summary, _ = analyze_dependencies(["package.json"], lambda p: ("{oops", None))
+        assert summary["status"] == "failed"
+
+    def test_details_are_truncated(self, config):
+        deps = [{"type": "runtime", "pinned": True, "name": str(i)} for i in range(80)]
+        summary = summarize_dependencies(deps, [], {"npm": ["package.json"]},
+                                         detail_limit=50)
+        assert len(summary["details"]) == 50
+        assert summary["details_truncated"] is True
+        assert summary["total_count"] == 80
+
+    def test_every_configured_manifest_has_a_parser(self, config):
+        from scripts.parse_dependencies import PARSERS
+        for ecosystem, spec in config["dependency_manifests"].items():
+            for file_name in spec["files"]:
+                assert (ecosystem, file_name) in PARSERS
 
 
 class TestDevDependenciesAreKept:

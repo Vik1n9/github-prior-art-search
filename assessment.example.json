@@ -1,0 +1,53 @@
+{
+  "components": [
+    {
+      "id": "limiter-core",
+      "verdict": "reuse",
+      "selected": {
+        "repository": "example-org/go-limiter",
+        "decision": "adopt_as_dependency",
+        "fit": "full",
+        "covered": ["滑動視窗演算法", "依任意 key 限流", "可設定視窗長度與上限"],
+        "gaps": [],
+        "evidence": [
+          "README: \"implements the sliding window log and counter algorithms\"",
+          "README usage: limiter.New(store, limiter.Rate{Period: time.Minute, Limit: 100})",
+          "top_level_entries: sliding_window.go, store/"
+        ],
+        "rationale": "README 明示支援滑動視窗且以任意字串為 key，視窗與上限皆可設定；授權 MIT，腳本上限允許直接作為依賴。"
+      },
+      "alternatives": [
+        {
+          "repository": "example-org/ratelimit-kit",
+          "decision": "reference_architecture_only",
+          "note": "演算法完整但授權為 GPL-3.0，腳本上限僅允許參考架構。"
+        }
+      ]
+    },
+    {
+      "id": "redis-store",
+      "verdict": "reuse",
+      "selected": {
+        "repository": "example-org/go-limiter",
+        "decision": "adopt_as_dependency",
+        "fit": "partial",
+        "covered": ["Redis 後端", "多實例共享狀態"],
+        "gaps": ["原子操作（Lua 或 MULTI）"],
+        "evidence": [
+          "top_level_entries: store/redis/",
+          "README: \"Redis store shares counters across instances\""
+        ],
+        "rationale": "同一倉庫提供 Redis store，但 README 未說明以 Lua 或 MULTI 保證原子性，需自行驗證或補強。"
+      }
+    },
+    {
+      "id": "http-middleware",
+      "verdict": "build_in_house",
+      "rationale": "候選中介層皆綁定特定框架且不輸出 Retry-After；此層程式量小，自行實作成本低於改寫。"
+    }
+  ],
+  "executive_summary": "限流演算法與 Redis 儲存可直接採用同一個 MIT 函式庫，需補驗 Redis 操作的原子性；HTTP 中介層建議自行實作以加上 Retry-After。",
+  "notable_observations": [
+    "此檔僅為格式示範，倉庫名稱為虛構，實際內容須取自 result.json。"
+  ]
+}

@@ -1,26 +1,43 @@
 {
-  "search_queries": [
-    "rate limiter middleware",
-    "sliding window rate limit",
-    "distributed rate limiting redis",
-    "topic:rate-limiting",
-    "golang throttling library",
-    "token bucket implementation go"
+  "requirement": "為多租戶 SaaS API 做一個速率限制中介層：以滑動視窗計算每個租戶的請求配額，配額狀態存在 Redis 以支援多實例部署，超限時回傳 429 並附上 Retry-After。",
+  "tech_stack": ["Go", "Redis"],
+  "components": [
+    {
+      "id": "limiter-core",
+      "name": "滑動視窗限流演算法",
+      "purpose": "依 key 計算滑動視窗內的請求數並判斷是否放行",
+      "must_have": ["滑動視窗演算法", "依任意 key 限流", "可設定視窗長度與上限"],
+      "match_terms": ["sliding window", "rate limit", "rate limiter", "ratelimit"],
+      "search_queries": [
+        "sliding window rate limiter language:go",
+        "rate limit algorithm golang",
+        "topic:rate-limiter language:go"
+      ]
+    },
+    {
+      "id": "redis-store",
+      "name": "Redis 分散式配額儲存",
+      "purpose": "多實例共享限流狀態",
+      "must_have": ["Redis 後端", "原子操作（Lua 或 MULTI）", "多實例共享狀態"],
+      "match_terms": ["redis", "distributed", "rate limit", "lua"],
+      "search_queries": [
+        "distributed rate limit redis go",
+        "redis rate limiter lua"
+      ]
+    },
+    {
+      "id": "http-middleware",
+      "name": "HTTP 中介層整合",
+      "purpose": "把限流接到 net/http 或常見框架，回傳 429 與 Retry-After",
+      "must_have": ["net/http 或主流框架中介層", "回傳 429", "Retry-After 標頭"],
+      "match_terms": ["middleware", "rate limit", "http", "429"],
+      "search_queries": [
+        "rate limit middleware go http",
+        "throttle middleware gin echo"
+      ]
+    }
   ],
-  "project_goal": "API 速率限制中介層",
-  "core_features": [
-    "滑動視窗限流",
-    "多租戶配額",
-    "Redis 儲存"
-  ],
-  "tech_stack": [
-    "Go",
-    "Redis"
-  ],
-  "domain": "rate_limiting",
-  "architecture_style": [],
   "exclude_repos": [],
-  "max_candidates": 8,
-  "min_stars": 100,
+  "candidates_per_component": 5,
   "last_commit_within_days": 730
 }

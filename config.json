@@ -1,35 +1,34 @@
 {
   "search": {
     "endpoint": "https://api.github.com/search/repositories",
-    "per_page": 50,
-    "sort": "updated",
-    "order": "desc",
-    "max_queries": 10,
+    "per_page": 30,
+    "max_components": 8,
+    "max_queries_per_component": 5,
+    "max_total_queries": 24,
+    "max_query_length": 240,
+    "max_rounds": 2,
     "rate_limit_max_wait_seconds": 130
   },
   "defaults": {
-    "min_stars": 100,
     "enforced_min_stars": 100,
-    "max_candidates": 8,
+    "candidates_per_component": 5,
+    "max_candidates_per_component": 10,
     "last_commit_within_days": 730
   },
+  "analysis": {
+    "workers": 4,
+    "readme_excerpt_chars": 4000,
+    "readme_match_chars": 30000,
+    "top_level_entries_limit": 60,
+    "dependency_detail_limit": 50
+  },
   "license_policy": {
-    "preferred": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause"],
-    "review_required": ["MPL-2.0", "LGPL-3.0", "GPL-3.0"],
-    "high_risk": ["AGPL-3.0", "SSPL-1.0"],
-    "unknown": ["NOASSERTION"],
-    "scores": {
-      "preferred": 100,
-      "review_required": 40,
-      "high_risk": 10,
-      "unknown": 0
-    },
-    "actions": {
-      "preferred": "allow_reuse",
-      "review_required": "require_manual_review",
-      "high_risk": "avoid_direct_reuse",
-      "unknown": "reference_only"
-    },
+    "preferred": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
+                  "0BSD", "Unlicense", "Zlib", "BSL-1.0", "CC0-1.0"],
+    "review_required": ["MPL-2.0", "LGPL-2.1", "LGPL-3.0", "GPL-2.0", "GPL-3.0",
+                        "EPL-2.0", "EUPL-1.2"],
+    "high_risk": ["AGPL-3.0", "SSPL-1.0", "BUSL-1.1", "Elastic-2.0",
+                  "CC-BY-NC-4.0", "CC-BY-NC-SA-4.0"],
     "risk_levels": {
       "preferred": "low",
       "review_required": "medium",
@@ -37,104 +36,14 @@
       "unknown": "high"
     }
   },
-  "dependency_risk_rules": {
-    "high_total_dependencies": {
-      "threshold": 200,
-      "level": "medium"
-    },
-    "high_unpinned_dependencies": {
-      "threshold": 20,
-      "level": "medium"
-    },
-    "no_lockfile": {
-      "level": "medium"
-    }
-  },
-  "scoring_weights": {
-    "relevance": 35,
-    "reusability": 20,
-    "maintenance_activity": 15,
-    "code_quality": 10,
-    "documentation": 10,
-    "license_fit": 10
-  },
-  "relevance_signals": {
-    "name_match": 20,
-    "description_match": 15,
-    "topics_match": 10,
-    "readme_match": 10,
-    "feature_match": 30,
-    "tech_stack_match": 15,
-    "enable_readme_match": true
-  },
-  "documentation_signals": {
-    "has_readme": 30,
-    "readme_has_install": 20,
-    "readme_has_usage": 20,
-    "has_docs_folder": 15,
-    "has_examples_folder": 15
-  },
-  "code_quality_signals": {
-    "has_tests": 25,
-    "has_ci": 25,
-    "has_lint_config": 15,
-    "has_release": 15,
-    "has_src_structure": 20
-  },
-  "reusability_signals": {
-    "lockfile_present": 5,
-    "has_release_or_tags": 4,
-    "moderate_dependency_count": 4,
-    "has_examples": 4,
-    "packaged_project": 3
-  },
-  "maintenance_buckets": [
-    { "max_days": 90, "score": 100 },
-    { "max_days": 180, "score": 85 },
-    { "max_days": 365, "score": 70 },
-    { "max_days": 730, "score": 40 },
-    { "score": 10 }
-  ],
-  "decision_rules": {
-    "evaluation_order": [
-      "avoid_due_to_risk",
-      "adopt_as_dependency",
-      "fork_and_modify",
-      "use_as_template",
-      "reference_architecture_only"
-    ],
-    "adopt_as_dependency": {
-      "total_score": 80,
-      "relevance": 80,
-      "license_fit": 90,
-      "maintenance_activity": 70,
-      "dependency_risk_max": "medium"
-    },
-    "fork_and_modify": {
-      "total_score": 75,
-      "relevance": 75,
-      "license_fit": 70,
-      "maintenance_activity": 50
-    },
-    "use_as_template": {
-      "total_score": 70,
-      "relevance": 70,
-      "license_fit": 70
-    },
-    "reference_architecture_only": {
-      "total_score": 55,
-      "relevance": 60
-    }
-  },
-  "output_dir_default": "output/github-prior-art-search",
   "dependency_manifests": {
     "npm": {
       "files": ["package.json"],
-      "lockfiles": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml"]
+      "lockfiles": ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"]
     },
     "python": {
-      "files": ["requirements.txt", "pyproject.toml", "setup.py", "poetry.lock", "Pipfile.lock"],
-      "lockfiles": ["poetry.lock", "Pipfile.lock"]
+      "files": ["requirements.txt", "pyproject.toml"],
+      "lockfiles": ["poetry.lock", "Pipfile.lock", "uv.lock", "pdm.lock"]
     },
     "go": {
       "files": ["go.mod"],
@@ -146,7 +55,81 @@
     },
     "java": {
       "files": ["pom.xml", "build.gradle", "build.gradle.kts"],
-      "lockfiles": []
+      "lockfiles": ["gradle.lockfile"]
     }
-  }
+  },
+  "dependency_risk_rules": [
+    {"kind": "total", "threshold": 500, "level": "high"},
+    {"kind": "total", "threshold": 200, "level": "medium"},
+    {"kind": "unpinned", "threshold": 20, "level": "medium"},
+    {"kind": "no_lockfile", "level": "medium"}
+  ],
+  "relevance_weights": {
+    "term_coverage": 50,
+    "metadata_coverage": 25,
+    "tech_stack": 15,
+    "query_hits": 10
+  },
+  "health_weights": {
+    "maintenance": 35,
+    "code_quality": 25,
+    "documentation": 25,
+    "reusability": 15
+  },
+  "rank_weights": {
+    "relevance": 70,
+    "health": 30
+  },
+  "documentation_signals": {
+    "has_readme": 30,
+    "readme_has_install": 20,
+    "readme_has_usage": 20,
+    "has_docs_folder": 15,
+    "has_examples_folder": 15
+  },
+  "code_quality_signals": {
+    "has_tests": 40,
+    "has_ci": 35,
+    "has_lint_config": 25
+  },
+  "reusability_signals": {
+    "lockfile_present": 25,
+    "has_release_or_tags": 25,
+    "moderate_dependency_count": 20,
+    "has_examples": 15,
+    "packaged_project": 15
+  },
+  "maintenance_buckets": [
+    { "max_days": 90, "score": 100 },
+    { "max_days": 180, "score": 85 },
+    { "max_days": 365, "score": 70 },
+    { "max_days": 730, "score": 40 },
+    { "score": 10 }
+  ],
+  "caps": {
+    "order": [
+      "adopt_as_dependency",
+      "fork_and_modify",
+      "use_as_template",
+      "reference_architecture_only"
+    ],
+    "license": {
+      "preferred": "adopt_as_dependency",
+      "review_required": "reference_architecture_only",
+      "high_risk": "reference_architecture_only",
+      "unknown": "reference_architecture_only"
+    },
+    "maintenance_below": { "score": 70, "cap": "fork_and_modify" },
+    "dependency_risk_high": "fork_and_modify",
+    "dependency_parsing_failed": "fork_and_modify"
+  },
+  "assessment": {
+    "max_summary_chars": 500,
+    "max_observations": 5,
+    "max_evidence_items": 8,
+    "max_evidence_chars": 300,
+    "max_rationale_chars": 600,
+    "max_alternatives": 3
+  },
+  "output_dir_default": "output/github-prior-art-search"
 }
