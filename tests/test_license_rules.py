@@ -1,19 +1,21 @@
 import pytest
 
-from scripts.parse_license import (analyze_license, classify_license,
-                                   license_action, license_fit_score)
+from scripts.parse_license import analyze_license, classify_license
 
 
 class TestClassification:
     @pytest.mark.parametrize("spdx,expected", [
         ("MIT", "preferred"),
         ("Apache-2.0", "preferred"),
-        ("BSD-3-Clause", "preferred"),
+        ("ISC", "preferred"),
+        ("Unlicense", "preferred"),
+        ("0BSD", "preferred"),
         ("MPL-2.0", "review_required"),
-        ("LGPL-3.0", "review_required"),
+        ("LGPL-2.1", "review_required"),
         ("GPL-3.0", "review_required"),
         ("AGPL-3.0", "high_risk"),
-        ("SSPL-1.0", "high_risk"),
+        ("BUSL-1.1", "high_risk"),
+        ("Elastic-2.0", "high_risk"),
         (None, "unknown"),
         ("NOASSERTION", "unknown"),
         ("Other/Custom", "review_required"),
@@ -22,35 +24,20 @@ class TestClassification:
         assert classify_license(spdx, config) == expected
 
 
-class TestScoresAndActions:
-    def test_score_mapping(self, config):
-        assert license_fit_score("preferred", config) == 100
-        assert license_fit_score("review_required", config) == 40
-        assert license_fit_score("high_risk", config) == 10
-        assert license_fit_score("unknown", config) == 0
-
-    def test_action_mapping(self, config):
-        assert license_action("review_required", config) == "require_manual_review"
-        assert license_action("high_risk", config) == "avoid_direct_reuse"
-        assert license_action("unknown", config) == "reference_only"
-
-
 class TestAnalyzeLicense:
     def _metadata(self, spdx=None):
         return {"license": {"spdx_id": spdx} if spdx else None}
 
-    def test_api_field_preferred(self, config):
+    def test_api_field(self, config):
         info = analyze_license(self._metadata("MIT"), ["src/main.py"], config)
-        assert info["spdx_id"] == "MIT"
-        assert info["source"] == "api_field"
-        assert info["category"] == "preferred"
+        assert info == {"spdx_id": "MIT", "source": "api_field",
+                        "category": "preferred", "risk_level": "low"}
 
-    def test_no_license_marked_unknown_and_high_risk(self, config):
+    def test_no_license_is_unknown_and_high_risk(self, config):
         info = analyze_license(self._metadata(None), [], config)
         assert info["category"] == "unknown"
-        assert info["license_fit_score"] == 0
+        assert info["source"] == "none"
         assert info["risk_level"] == "high"
-        assert info["action"] == "reference_only"
 
     def test_license_file_but_unparsed_stays_unknown(self, config):
         info = analyze_license(self._metadata(None), ["LICENSE"], config)
@@ -60,4 +47,3 @@ class TestAnalyzeLicense:
     def test_noassertion_normalized_to_none(self, config):
         info = analyze_license(self._metadata("NOASSERTION"), [], config)
         assert info["spdx_id"] is None
-        assert info["category"] == "unknown"

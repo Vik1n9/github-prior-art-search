@@ -1,162 +1,203 @@
-from pathlib import Path
 from typing import Any, Dict, List
 
-from .common import write_json
+DECISION_LABELS = {
+    "adopt_as_dependency": "直接作為依賴",
+    "fork_and_modify": "Fork 後修改",
+    "use_as_template": "作為模板",
+    "reference_architecture_only": "僅參考架構",
+    "build_in_house": "自行開發",
+}
 
 
-def _join(items: List[Any], separator: str = "、") -> str:
-    return separator.join(str(item) for item in items)
+def _label(decision: str) -> str:
+    return f"{DECISION_LABELS.get(decision, decision)}（`{decision}`）"
 
 
-def _project_section(project: Dict[str, Any]) -> List[str]:
-    tech_stack = project.get("tech_stack") or []
-    lines = [
-        "## 專案輸入",
-        "",
-        f"- 專案目標：{project.get('goal', '')}",
-        f"- 核心功能：{_join(project.get('core_features', []))}",
-        f"- 技術堆疊：{_join(tech_stack) if tech_stack else '（未提供）'}",
-    ]
-    if project.get("domain"):
-        lines.append(f"- 領域：{project['domain']}")
-    lines.append("")
-    return lines
-
-
-def _search_section(search: Dict[str, Any]) -> List[str]:
-    queries = search.get("queries", [])
-    lines = [
-        "## 搜尋條件",
-        "",
-        f"- 最低星數：{search.get('effective_min_stars')}（腳本強制）",
-        "- 忽略封存專案：是",
-        "- 忽略禁用專案：是",
-        f"- 最後提交限制：{search['filters']['last_commit_within_days']} 天",
-        f"- 執行查詢數：{len(queries)}",
-        f"- 原始結果：{search.get('raw_results')} → 過濾後 "
-        f"{search.get('after_filter')} → 深度分析 {search.get('deep_analyzed')}",
-        "",
-        "<details>",
-        "<summary>搜尋查詢清單</summary>",
-        "",
-        "```text",
-    ]
-    lines.extend(queries)
-    lines.extend(["```", "</details>", ""])
-    return lines
-
-
-def _candidate_table(candidates: List[Dict[str, Any]]) -> List[str]:
-    lines = ["| 專案 | 星數 | 授權 | 最後更新 | 總分 | 決策 |",
-             "|---|---:|---|---|---:|---|"]
-    for candidate in candidates:
-        spdx = (candidate.get("license") or {}).get("spdx_id") or "unknown"
-        pushed = (candidate.get("pushed_at") or "")[:10]
-        lines.append(
-            f"| [{candidate['repository']}]({candidate.get('url')}) | "
-            f"{candidate.get('stars', 0)} | {spdx} | {pushed} | "
-            f"{candidate['scores']['total']} | {candidate['reuse_decision']} |")
-    lines.append("")
-    return lines
-
-
-def _candidate_detail(index: int, candidate: Dict[str, Any]) -> List[str]:
-    license_info = candidate.get("license") or {}
-    dependencies = candidate.get("dependencies") or {}
-    manifests = dependencies.get("manifests_found") or []
-    scores = candidate["scores"]
-
-    lines = [
-        f"#### {index}. {candidate['repository']} — 決策：{candidate['reuse_decision']}",
-        "",
-        f"- 說明：{candidate.get('description') or '（無說明）'}",
-        f"- 星數：{candidate.get('stars', 0)}｜Forks：{candidate.get('forks', 0)}"
-        f"｜語言：{candidate.get('language') or '未知'}",
-        f"- 授權：{license_info.get('spdx_id') or 'unknown'}"
-        f"（分類：{license_info.get('category')}、來源：{license_info.get('source')}）",
-        f"- 分數：相關度 {scores['relevance']}｜重用性 {scores['reusability']}"
-        f"｜維護活躍度 {scores['maintenance_activity']}｜程式碼品質 "
-        f"{scores['code_quality']}｜文件 {scores['documentation']}｜授權契合 "
-        f"{scores['license_fit']}｜**總分 {scores['total']}**",
-        f"- 依賴：{dependencies.get('total_count', 0)} 筆"
-        f"（runtime {dependencies.get('runtime_count', 0)}／dev "
-        f"{dependencies.get('dev_count', 0)}），未固定版本 "
-        f"{dependencies.get('unpinned_count', 0)} 筆，lockfile："
-        f"{'有' if dependencies.get('lockfile_present') else '無'}，"
-        f"清單檔：{', '.join(manifests) if manifests else '未偵測到'}",
-    ]
-
-    risks = candidate.get("risks") or []
-    if risks:
-        lines.extend(["", "- 風險標記："])
-        lines.extend(f"  - [{r['level']}] {r['type']}：{r['detail']}" for r in risks)
-    else:
-        lines.append("- 風險標記：（無）")
-
-    lines.extend(["", f"> {candidate.get('summary', '')}", ""])
-    return lines
-
-
-def _candidates_section(candidates: List[Dict[str, Any]]) -> List[str]:
-    lines = ["## 候選專案", ""]
-    if not candidates:
-        lines.extend(["（無候選專案。所有輸入條件過濾後沒有符合的倉庫。）", ""])
-        return lines
-
-    lines.extend(_candidate_table(candidates))
-    lines.extend(["### 各候選詳情", ""])
-    for index, candidate in enumerate(candidates, start=1):
-        lines.extend(_candidate_detail(index, candidate))
-    return lines
-
-
-def _recommendation_section(recommendation: Dict[str, Any]) -> List[str]:
-    primary_repo = recommendation.get("primary_repository")
-    parts = recommendation.get("build_in_house_parts") or []
-    lines = [
-        "## 建議",
-        "",
-        f"- 主要動作：**{recommendation['primary_action']}**"
-        f"{f'（{primary_repo}）' if primary_repo else ''}",
-        f"- 主要原因：{recommendation['reason']}",
-        f"- 需自行開發部分：{_join(parts) if parts else '（無）'}",
-        "",
-        "### 後續步驟",
-        "",
-    ]
-    lines.extend(f"{i}. {step}"
-                 for i, step in enumerate(recommendation.get("next_steps", []), start=1))
-    lines.append("")
-    return lines
+def _cell(text: Any) -> str:
+    return str(text).replace("|", "\\|").replace("\n", " ")
 
 
 def _warnings_section(warnings: List[Dict[str, str]]) -> List[str]:
     if not warnings:
         return []
     lines = ["## 警告", ""]
-    for warning in warnings:
-        prefix = f"[{warning['query']}] " if warning.get("query") else ""
-        lines.append(f"- {prefix}{warning['type']}：{warning['detail']}")
+    for w in warnings:
+        scope = w.get("component") or w.get("repository") or ""
+        query = f"「{w['query']}」" if w.get("query") else ""
+        prefix = f"[{scope}{query}] " if scope or query else ""
+        lines.append(f"- {prefix}`{w['type']}`：{w['detail']}")
     lines.append("")
     return lines
 
 
-def render_report_text(result: Dict[str, Any]) -> str:
+def _repo_warnings(result: Dict[str, Any]) -> List[Dict[str, str]]:
+    return [w for facts in result["repositories"].values() for w in facts["warnings"]]
+
+
+def _candidate_table(component: Dict[str, Any], repos: Dict[str, Any]) -> List[str]:
+    lines = ["| 倉庫 | 排序分 | 相關度 | 健康度 | 星數 | 授權 | 可採用上限 | 未命中詞 |",
+             "|---|---:|---:|---:|---:|---|---|---|"]
+    for c in component["candidates"]:
+        facts = repos[c["repository"]]
+        missing = "、".join(c["relevance"]["missing_terms"]) or "—"
+        lines.append(
+            f"| [{c['repository']}]({facts['url']}) | {c['rank_score']} | "
+            f"{c['relevance']['score']} | {facts['scores']['health']} | {facts['stars']} | "
+            f"{facts['license']['spdx_id'] or 'unknown'} | `{facts['cap']}` | "
+            f"{_cell(missing)} |")
+    lines.append("")
+    return lines
+
+
+def _component_search_section(component: Dict[str, Any],
+                              repos: Dict[str, Any]) -> List[str]:
+    stats = component["stats"]
     lines = [
-        "# GitHub 先行調研報告",
+        f"### {component['name']}（`{component['id']}`，第 {component['round']} 輪）",
         "",
-        f"> 由 `github-prior-art-search` 腳本產生（script-first）。"
-        f"生成時間：{result['execution']['finished_at']}",
+        f"- must_have：{'、'.join(component['must_have'])}",
+        f"- match_terms：{', '.join(component['match_terms'])}",
+        f"- 查詢：{' ／ '.join(f'`{q}`' for q in component['search_queries'])}",
+        f"- 結果：原始 {stats['raw_results']} 筆 → 過濾後不重複 "
+        f"{stats['unique_after_filter']} 個 → 深度分析 {stats['shortlisted']} 個",
         "",
     ]
-    lines.extend(_project_section(result["project"]))
-    lines.extend(_search_section(result["search"]))
-    lines.extend(_candidates_section(result["candidates"]))
-    lines.extend(_recommendation_section(result["recommendation"]))
-    lines.extend(_warnings_section(result["warnings"]))
+    if not component["candidates"]:
+        lines.extend(["（無候選。可重新設計此組件的查詢並以 `--only` 重跑，"
+                      "或判定 build_in_house。）", ""])
+        return lines
+    lines.extend(_candidate_table(component, repos))
+    return lines
+
+
+def _repository_section(name: str, facts: Dict[str, Any]) -> List[str]:
+    deps = facts["dependencies"]
+    lines = [
+        f"### {name}",
+        "",
+        f"- {facts['description'] or '（無說明）'}",
+        f"- 星數 {facts['stars']}｜語言 {facts['language'] or '未知'}｜"
+        f"最後推送 {(facts['pushed_at'] or '')[:10]}（{facts['days_since_push']} 天前）",
+        f"- 授權：{facts['license']['spdx_id'] or 'unknown'}"
+        f"（{facts['license']['category']}，來源 {facts['license']['source']}）",
+        f"- 健康度 {facts['scores']['health']}：維護 {facts['scores']['maintenance']}｜"
+        f"品質 {facts['scores']['code_quality']}｜文件 {facts['scores']['documentation']}｜"
+        f"重用性 {facts['scores']['reusability']}",
+        f"- 依賴（{deps['status']}）：{deps['total_count']} 筆"
+        f"（runtime {deps['runtime_count']}／dev {deps['dev_count']}），"
+        f"未固定 {deps['unpinned_count']}，lockfile {'有' if deps['lockfile_present'] else '無'}",
+        f"- 可採用上限：`{facts['cap']}`"
+        + (f"（{'；'.join(facts['cap_reasons'])}）" if facts["cap_reasons"] else ""),
+    ]
+    if facts["risks"]:
+        lines.extend(f"- 風險 [{r['level']}] {r['type']}：{r['detail']}"
+                     for r in facts["risks"])
+    if facts["data_gaps"]:
+        lines.append(f"- 資料缺口：{', '.join(facts['data_gaps'])}")
+    lines.append("")
+    return lines
+
+
+def render_search_report(result: Dict[str, Any]) -> str:
+    filters = result["filters"]
+    lines = [
+        "# GitHub 先行調研：搜尋結果（待評估）",
+        "",
+        f"> 狀態 `{result['status']}`｜產生於 {result['execution']['finished_at']}｜"
+        "此報告僅含腳本事實，尚未經模型適配判斷。",
+        "",
+        "## 需求",
+        "",
+        result["requirement"],
+        "",
+        f"- 過濾：星數 ≥ {filters['min_stars']}、最後推送 ≤ "
+        f"{filters['last_push_within_days']} 天、排除 archived／disabled",
+        "",
+        "## 各組件候選",
+        "",
+    ]
+    for component in result["components"]:
+        lines.extend(_component_search_section(component, result["repositories"]))
+    if result["repositories"]:
+        lines.extend(["## 倉庫事實", ""])
+        for name, facts in result["repositories"].items():
+            lines.extend(_repository_section(name, facts))
+    lines.extend(_warnings_section(result["warnings"] + _repo_warnings(result)))
     return "\n".join(lines)
 
 
-def write_outputs(out_dir: Path, result: Dict[str, Any]) -> None:
-    write_json(out_dir / "result.json", result)
-    (out_dir / "result.md").write_text(render_report_text(result), encoding="utf-8")
+def _plan_table(plan: List[Dict[str, Any]]) -> List[str]:
+    lines = ["| 組件 | 結論 | 倉庫 | 決策 | 適配 |", "|---|---|---|---|---|"]
+    for item in plan:
+        if item["verdict"] == "build_in_house":
+            lines.append(f"| {_cell(item['name'])} | 自行開發 | — | — | — |")
+        else:
+            lines.append(
+                f"| {_cell(item['name'])} | 重用 | [{item['repository']}]({item['url']}) | "
+                f"{_label(item['decision'])} | {item['fit']} |")
+    lines.append("")
+    return lines
+
+
+def _plan_detail(item: Dict[str, Any]) -> List[str]:
+    lines = [f"### {item['name']}（`{item['component']}`）", ""]
+    if item["verdict"] == "build_in_house":
+        lines.extend([f"- 結論：自行開發（搜尋 {item['search_rounds']} 輪）",
+                      f"- 理由：{item['rationale']}"])
+    else:
+        lines.extend([
+            f"- 結論：{_label(item['decision'])} → "
+            f"[{item['repository']}]({item['url']})",
+            f"- 腳本上限：`{item['cap']}`"
+            + (f"（{'；'.join(item['cap_reasons'])}）" if item["cap_reasons"] else ""),
+            f"- 授權：{item['license'] or 'unknown'}",
+            f"- 已涵蓋：{'、'.join(item['covered'])}",
+            f"- 缺口：{'、'.join(item['gaps']) or '（無）'}",
+            f"- 理由：{item['rationale']}",
+            "- 證據：",
+        ])
+        lines.extend(f"  - {e}" for e in item["evidence"])
+        lines.extend(f"- 風險 [{r['level']}] {r['type']}：{r['detail']}"
+                     for r in item["risks"])
+    for alt in item["alternatives"]:
+        lines.append(f"- 備選：[{alt['repository']}]({alt['url']}) "
+                     f"{_label(alt['decision'])}：{alt['note']}")
+    lines.append("- 後續步驟：")
+    lines.extend(f"  {i}. {step}" for i, step in enumerate(item["next_steps"], start=1))
+    lines.append("")
+    return lines
+
+
+def render_final_report(final: Dict[str, Any]) -> str:
+    summary = final["summary"]
+    lines = [
+        "# GitHub 先行調研報告",
+        "",
+        f"> 狀態 `{final['status']}`｜定稿於 {final['finalized_at']}｜"
+        f"result.json sha256 `{final['result_sha256'][:12]}`",
+        "",
+        "## 需求",
+        "",
+        final["requirement"],
+        "",
+        "## 摘要",
+        "",
+        summary["executive_summary"],
+        "",
+    ]
+    if summary["notable_observations"]:
+        lines.extend(f"- {o}" for o in summary["notable_observations"])
+        lines.append("")
+    lines.extend(["## 組件方案", ""])
+    lines.extend(_plan_table(final["plan"]))
+    for item in final["plan"]:
+        lines.extend(_plan_detail(item))
+    lines.extend(["## 需自行開發部分", ""])
+    if final["build_in_house_parts"]:
+        for part in final["build_in_house_parts"]:
+            lines.append(f"- {part['name']}（{part['reason']}）：{'、'.join(part['items'])}")
+    else:
+        lines.append("（無）")
+    lines.append("")
+    lines.extend(_warnings_section(final["warnings"]))
+    return "\n".join(lines)

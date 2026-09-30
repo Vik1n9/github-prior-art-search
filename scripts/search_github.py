@@ -1,60 +1,12 @@
-import re
 import time
+import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .common import ScriptFailure, http_get_json, http_get_text, load_config
+from .common import http_get, http_get_json, load_config
 
-REQUIRED_INPUTS = ("project_goal", "core_features")
-LIST_INPUTS = ("tech_stack", "architecture_style", "exclude_repos", "search_queries")
-INT_INPUTS = ("max_candidates", "min_stars", "last_commit_within_days")
-
+API_BASE = "https://api.github.com"
 RAW_BASE = "https://raw.githubusercontent.com"
-README_NAMES = {"readme", "readme.md", "readme.txt", "readme.rst"}
-QUERIES_TRUNCATED = "search_queries_truncated"
-
-
-def validate_input(data: Any) -> Dict[str, Any]:
-    if not isinstance(data, dict):
-        raise ScriptFailure("輸入必須是 JSON 物件", "invalid_input")
-
-    errors: List[str] = []
-    for key in REQUIRED_INPUTS:
-        if key not in data or data[key] in (None, "", []):
-            errors.append(f"缺少必要欄位: {key}")
-
-    if not isinstance(data.get("project_goal", ""), str):
-        errors.append("project_goal 必須是字串")
-
-    features = data.get("core_features")
-    if features is not None and (not isinstance(features, list)
-                                 or not all(isinstance(x, str) for x in features)):
-        errors.append("core_features 必須是字串陣列")
-
-    queries = data.get("search_queries")
-    if queries is None:
-        errors.append("缺少必要欄位: search_queries"
-                      "（搜尋查詢須由呼叫端依專案目的與功能需求設計，腳本不代為生成）")
-    elif not isinstance(queries, list) or not all(isinstance(x, str) for x in queries):
-        errors.append("search_queries 必須是字串陣列")
-    elif not any(x.strip() for x in queries):
-        errors.append("search_queries 不得為空"
-                      "（搜尋查詢須由呼叫端依專案目的與功能需求設計，腳本不代為生成）")
-
-    for field in LIST_INPUTS:
-        if data.get(field) is not None and not isinstance(data[field], list):
-            errors.append(f"{field} 必須是陣列")
-
-    for field in INT_INPUTS:
-        if data.get(field) is not None and not isinstance(data[field], int):
-            errors.append(f"{field} 必須是整數")
-
-    if data.get("domain") is not None and not isinstance(data["domain"], str):
-        errors.append("domain 必須是字串")
-
-    if errors:
-        raise ScriptFailure("輸入校驗失敗：" + "；".join(errors), "invalid_input")
-    return data
 
 
 def effective_min_stars(input_data: Dict[str, Any]) -> int:
@@ -65,32 +17,6 @@ def effective_min_stars(input_data: Dict[str, Any]) -> int:
 def effective_max_age_days(input_data: Dict[str, Any]) -> int:
     configured = int(load_config()["defaults"]["last_commit_within_days"])
     return int(input_data.get("last_commit_within_days") or configured)
-
-
-def _normalize(query: str) -> str:
-    return re.sub(r"\s+", " ", query).strip()
-
-
-def build_queries(input_data: Dict[str, Any]
-                  ) -> Tuple[List[str], List[Dict[str, str]]]:
-    queries: List[str] = []
-    seen: set = set()
-
-    for raw in input_data.get("search_queries") or []:
-        query = _normalize(str(raw))
-        if query and query.lower() not in seen:
-            seen.add(query.lower())
-            queries.append(query)
-
-    cap = int(load_config()["search"]["max_queries"])
-    warnings: List[Dict[str, str]] = []
-    if len(queries) > cap:
-        warnings.append({
-            "type": QUERIES_TRUNCATED,
-            "detail": f"輸入提供 {len(queries)} 條查詢，超過單次執行上限 {cap} 條，"
-                      f"僅執行前 {cap} 條。",
-        })
-    return queries[:cap], warnings
 
 
 def ensure_star_filter(query: str, min_stars: int) -> str:
@@ -104,8 +30,6 @@ def search_repositories(query: str, token: str, min_stars: int
     search = load_config()["search"]
     result = http_get_json(search["endpoint"], token=token, params={
         "q": ensure_star_filter(query, min_stars),
-        "sort": search["sort"],
-        "order": search["order"],
         "per_page": search["per_page"],
     })
     if result.error:
@@ -114,55 +38,51 @@ def search_repositories(query: str, token: str, min_stars: int
     return items, None
 
 
-def _days_since_push(pushed_at: str, now_ts: float) -> Optional[int]:
-    try:
-        pushed = datetime.strptime(pushed_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc)
-    except ValueError:
+def days_since(timestamp: Optional[str], now_ts: float) -> Optional[int]:
+    if not timestamp:
         return None
-    return (datetime.fromtimestamp(now_ts, tz=timezone.utc) - pushed).days
+    try:
+        parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    return max((datetime.fromtimestamp(now_ts, tz=timezone.utc) - parsed).days, 0)
 
 
-def _discard_reason(repo: Dict[str, Any], floor: int, exclude: set,
+def _normalize_exclude(exclude_repos: List[str]) -> set:
+    exclude = set()
+    for entry in exclude_repos or []:
+        normalized = entry.strip().lower().rstrip("/")
+        exclude.add(normalized.replace("https://github.com/", ""))
+    return exclude
+
+
+def _discard_reason(repo: Dict[str, Any], min_stars: int, exclude: set,
                     max_age_days: int, now_ts: float) -> Optional[str]:
-    if repo.get("stargazers_count", 0) < floor:
-        return f"stars<{floor}"
+    if repo.get("stargazers_count", 0) < min_stars:
+        return f"stars<{min_stars}"
     if repo.get("archived") is True:
         return "archived"
-    if repo.get("disabled", False) is True:
+    if repo.get("disabled") is True:
         return "disabled"
-    if repo.get("full_name", "").lower() in exclude or \
-            (repo.get("html_url") or "").lower() in exclude:
+    if repo.get("full_name", "").lower() in exclude:
         return "excluded"
-    pushed_at = repo.get("pushed_at")
-    if pushed_at and max_age_days:
-        days = _days_since_push(pushed_at, now_ts)
-        if days is not None and days > max_age_days:
-            return f"last_commit>{max_age_days}d"
+    days = days_since(repo.get("pushed_at"), now_ts)
+    if days is not None and days > max_age_days:
+        return f"last_push>{max_age_days}d"
     return None
 
 
 def filter_repositories(items: List[Dict[str, Any]], exclude_repos: List[str],
-                        max_age_days: Optional[int] = None,
+                        min_stars: int, max_age_days: int,
                         now_ts: Optional[float] = None
                         ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    config = load_config()
-    floor = int(config["defaults"]["enforced_min_stars"])
-    if max_age_days is None:
-        max_age_days = int(config["defaults"]["last_commit_within_days"])
-    if now_ts is None:
-        now_ts = time.time()
-
-    exclude = set()
-    for entry in exclude_repos or []:
-        normalized = entry.strip().lower()
-        exclude.add(normalized)
-        exclude.add(normalized.rstrip("/").replace("https://github.com/", ""))
-
+    now_ts = time.time() if now_ts is None else now_ts
+    exclude = _normalize_exclude(exclude_repos)
     kept: List[Dict[str, Any]] = []
     discarded: List[Dict[str, str]] = []
     for repo in items:
-        reason = _discard_reason(repo, floor, exclude, max_age_days, now_ts)
+        reason = _discard_reason(repo, min_stars, exclude, max_age_days, now_ts)
         if reason:
             discarded.append({"repository": repo.get("full_name", ""), "reason": reason})
         else:
@@ -170,27 +90,25 @@ def filter_repositories(items: List[Dict[str, Any]], exclude_repos: List[str],
     return kept, discarded
 
 
-def deduplicate(repos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    best: Dict[str, Dict[str, Any]] = {}
-    order: List[str] = []
-    for repo in repos:
+def merge_hits(hits: List[Tuple[str, Dict[str, Any]]]
+               ) -> List[Tuple[Dict[str, Any], List[str]]]:
+    merged: Dict[str, Tuple[Dict[str, Any], List[str]]] = {}
+    for query, repo in hits:
         name = repo.get("full_name", "")
-        if name not in best:
-            best[name] = repo
-            order.append(name)
-        elif repo.get("stargazers_count", 0) > best[name].get("stargazers_count", 0):
-            best[name] = repo
-    return [best[name] for name in order]
+        if name not in merged:
+            merged[name] = (repo, [query])
+        elif query not in merged[name][1]:
+            merged[name][1].append(query)
+    return list(merged.values())
 
 
-def sort_initial(repos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return sorted(repos, key=lambda r: (r.get("stargazers_count", 0),
-                                        r.get("pushed_at") or ""), reverse=True)
+def _quote(value: str) -> str:
+    return urllib.parse.quote(value, safe="")
 
 
-def fetch_file_tree(full_name: str, default_branch: str, token: str
+def fetch_file_tree(full_name: str, branch: str, token: str
                     ) -> Tuple[List[str], bool, Optional[Dict[str, str]]]:
-    url = f"https://api.github.com/repos/{full_name}/git/trees/{default_branch}"
+    url = f"{API_BASE}/repos/{full_name}/git/trees/{_quote(branch)}"
     result = http_get_json(url, token=token, params={"recursive": "1"})
     if result.error:
         return [], False, result.error
@@ -200,22 +118,27 @@ def fetch_file_tree(full_name: str, default_branch: str, token: str
     return paths, bool(data.get("truncated", False)), None
 
 
-def find_readme_path(paths: List[str]) -> Optional[str]:
-    for path in paths:
-        if "/" not in path and path.lower() in README_NAMES:
-            return path
-    return None
+def fetch_readme(full_name: str, token: str
+                 ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
+    result = http_get(f"{API_BASE}/repos/{full_name}/readme", token=token,
+                      accept="application/vnd.github.raw+json", not_found_ok=True)
+    return result.data, result.error
 
 
-def fetch_raw_file(full_name: str, default_branch: str, path: str, token: str
+def fetch_raw_file(full_name: str, branch: str, path: str, token: str
                    ) -> Tuple[Optional[str], Optional[Dict[str, str]]]:
-    return http_get_text(f"{RAW_BASE}/{full_name}/{default_branch}/{path}", token=token)
+    url = f"{RAW_BASE}/{full_name}/{_quote(branch)}/{urllib.parse.quote(path)}"
+    result = http_get(url, token=token, accept="text/plain", not_found_ok=True)
+    return result.data, result.error
 
 
-def fetch_has_release(full_name: str, token: str
-                      ) -> Tuple[bool, Optional[Dict[str, str]]]:
-    url = f"https://api.github.com/repos/{full_name}/releases"
-    result = http_get_json(url, token=token, params={"per_page": 1})
-    if result.error:
-        return False, result.error
-    return bool(result.data if isinstance(result.data, list) else []), None
+def fetch_has_release_or_tag(full_name: str, token: str
+                             ) -> Tuple[Optional[bool], Optional[Dict[str, str]]]:
+    for endpoint in ("releases", "tags"):
+        result = http_get_json(f"{API_BASE}/repos/{full_name}/{endpoint}",
+                               token=token, params={"per_page": 1})
+        if result.error:
+            return None, result.error
+        if isinstance(result.data, list) and result.data:
+            return True, None
+    return False, None
